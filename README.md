@@ -27,7 +27,6 @@ stock_simulation/
 ├── indicator_settings_api.php        # 參數設定 API
 │
 ├── stock_trader.py                   # 交易引擎（Python 版，CLI / Windows 排程）
-├── run_simulation.py                 # 回測 / 試算入口
 ├── kd.py                             # KD 指標參考實作（EMA 平滑）
 │
 ├── examples/
@@ -75,10 +74,10 @@ python stock_trader.py --update
 
 # 顯示現有狀態
 python stock_trader.py --status
-
-# 跑回測
-python run_simulation.py
 ```
+
+> ⚠️ `run_simulation.py` 已於 2026-08-07 廢除 — 它的功能（執行交易 + 顯示狀態）
+> 全部由 `stock_trader.py` 接手，不需要兩條入口。
 
 ---
 
@@ -144,8 +143,19 @@ D   = D × (2/3) + K   × (1/3)
 **功能完全一致**，包含：
 - Dashboard / 個股歷史圖 / 獲利曲線 / 參數設定頁
 - 7 個 PHP 端點（4 個頁面 + 3 個 API）
-- Python CLI 交易引擎 + 回測
+- Python CLI 交易引擎（`stock_trader.py`）
 - 兩個策略帳戶的快照暫存 / 還原
+
+### 交易入口（2026-08-07 更新）
+
+| 場景 | 入口 | 引擎 |
+|------|------|------|
+| Windows 手動跑 | `python stock_trader.py` | Python |
+| Windows 排程 | `.venv\Scripts\python.exe stock_trader.py` | Python |
+| Dashboard 網頁按鈕 | 點 `index.php` 上的按鈕 | PHP（呼叫 `stock_trader.php?run=1`） |
+| 純查狀態 | `python stock_trader.py --status` | Python |
+
+> `run_simulation.py`（HTTP 殼）已廢除。所有 Python 邏輯統一在 `stock_trader.py`。
 
 ### 部署到新機器
 
@@ -156,7 +166,7 @@ D   = D × (2/3) + K   × (1/3)
    - `profit_history.json`（損益歷史）
    - `daily_analysis.json`（每日分析）
    - `data/indicator_settings.json`（參數設定）
-3. **Python 部分**：`pip install yfinance pandas` 後用 `stock_trader.py` / `run_simulation.py`。
+3. **Python 部分**：`pip install yfinance pandas` 後用 `stock_trader.py`。
 
 ---
 
@@ -168,5 +178,22 @@ D   = D × (2/3) + K   × (1/3)
 - **CSV / 報表四捨五入採 half-up**（5 永遠進位，不是 banker's rounding）
 - **Dashboard 入口 = `index.php`**：對應 Apache `DirectoryIndex`，部署到 `/stock/`
   目錄時直接用 `/stock/` 即可，不需要 `/stock/index.php`
+- **PHP / Python 兩套實作獨立維護**：兩個引擎的策略邏輯可能漂移，修 bug 兩邊都要改
+- **任何 *.php 改完必跑所有 endpoint**（`?run=1` / `?update=1` / `?snapshot=1` /
+  `?restore=1`）確認 200，且 Dashboard 按鈕仍能觸發
+
+---
+
+## 已知 bug 修復紀錄
+
+### 2026-08-07：stock_trader.php 三個 bug
+
+| Bug | 位置 | 影響 | 修復 |
+|-----|------|------|------|
+| `is_array($val)` 缺 `)` | line 103 | 全檔 parse error，HTTP 500 | 補 `)` |
+| 檔案結尾缺 `}` | line 579 | 修上一個之後才浮現 | 加 `}` |
+| `getSignal()` 用 `ma5/ma20` 但指標產出 `ma_short/ma_long` | line 274-276 | MA 訊號永遠不觸發，PHP Warning | 改用正確 key |
+
+> 觸發場景：Dashboard 按鈕「手動執行交易」→ `fetch('stock_trader.php?run=1')` 一直 500。
 
 ---

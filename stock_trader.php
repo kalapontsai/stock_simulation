@@ -100,7 +100,7 @@ function loadIndicatorSettings($strategyIdx = 0) {
     
     $result = $default;
     foreach ($data as $key => $val) {
-        if (is_array($val) {
+        if (is_array($val)) {
             $result[$key] = $val;
         }
     }
@@ -271,9 +271,9 @@ function getSignal($indicators) {
     $signals = [];
 
     // MA 黃金交叉/死亡交叉
-    if ($indicators['ma5'] > $indicators['ma20']) {
+    if ($indicators['ma_short'] > $indicators['ma_long']) {
         $signals[] = 'MA_GOLDEN'; // 買入訊號
-    } elseif ($indicators['ma5'] < $indicators['ma20']) {
+    } elseif ($indicators['ma_short'] < $indicators['ma_long']) {
         $signals[] = 'MA_DEAD'; // 賣出訊號
     }
 
@@ -575,4 +575,6 @@ if (php_sapi_name() === 'cli' || isset($_GET['run']) || isset($_GET['update']) |
     }
 
     echo ($isUpdateOnly ? "股價更新" : "執行") . "完成!\n";
+}
+
 }
