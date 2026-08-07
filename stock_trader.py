@@ -23,18 +23,6 @@ except ImportError:
 
 
 # 設定
-STOCKS = [
-    '0050.TW',    # 元大台灣50
-    '006208.TW',  # 富邦台灣50
-    '0056.TW',    # 元大高股息
-    '00919.TW',   # 群益台灣精選高股息
-    '2330.TW',    # 台積電
-    '3711.TW',   # 聯發科
-    '2412.TW',   # 中華電
-    '2881.TW',   # 富邦金
-    '2885.TW',   # 元大金
-    '2891.TW'    # 中信金
-]
 
 STRATEGIES = ['策略1', '策略2']
 STRATEGY_NAMES = {
@@ -56,6 +44,8 @@ SETTINGS_FILE = DATA_DIR / 'indicator_settings.json'
 # 建立資料目錄
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+
+
 # Dashboard 讀取的主要檔案位置
 MAIN_DIR = Path('D:/docker-volumn/ubuntu-apache2/html/stock')
 MAIN_PORTFOLIO = MAIN_DIR / 'portfolio.json'
@@ -71,6 +61,22 @@ def load_json(path, default=None):
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     return default if default is not None else {}
+
+
+# 股票清單（從 stock_list.json 動態讀取，維護頁面在 stocks.php）
+STOCK_LIST_FILE = DATA_DIR / 'stock_list.json'
+
+def load_stock_list() -> list:
+    """讀取股票清單（從 stock_list.json）"""
+    if not STOCK_LIST_FILE.exists():
+        return []
+    try:
+        data = load_json(STOCK_LIST_FILE, {'stocks': []})
+        return data.get('stocks', [])
+    except Exception:
+        return []
+
+STOCKS = load_stock_list()
 
 
 def load_indicator_settings(strategy_idx: int = 0) -> dict:
@@ -165,7 +171,7 @@ def save_json(path, data):
 def fetch_stock_data(symbol: str) -> list | None:
     """從 Yahoo Finance 取得股價資料（使用 yfinance）"""
     try:
-        df = yf.download(symbol, period="6mo")
+        df = yf.download(symbol, period="1y")
         if df.empty:
             return None
 

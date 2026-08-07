@@ -20,9 +20,11 @@ stock_simulation/
 ├── index.php                         # Dashboard（前端入口）
 ├── profit_history.php                # 獲利曲線
 ├── stock_history.php                 # 個股歷史圖
+├── stocks.php                        # 股票清單維護頁
 ├── indicator_settings.php            # 參數設定頁
 │
 ├── stock_trader.php                  # 交易引擎（PHP 版，含網頁觸發 + CLI）
+├── stocks_api.php                    # 股票清單 CRUD API（含自動結算）
 ├── stock_history_api.php             # 個股歷史 API
 ├── indicator_settings_api.php        # 參數設定 API
 │
@@ -33,6 +35,7 @@ stock_simulation/
 │   ├── indicator_settings.example.json   # 技術指標參數範例
 │   ├── portfolio.example.json            # 帳戶結構範例（空帳戶）
 │   ├── stock_data.example.json           # 股價資料格式（1 筆樣本）
+│   ├── stock_list.example.json           # 股票清單範例（可交易 10 支）
 │   └── profit_history.example.json       # 損益歷史格式範例
 │
 └── scripts/                          # 預留：輔助腳本（批次、報表）
@@ -91,6 +94,9 @@ python stock_trader.py --status
 | 每次買入金額 | 約占可用現金的 50% |
 | 帳戶餘額不足 | 無法買入 |
 | 庫存不足 | 無法賣出 |
+| 可交易股票 | **動態**清單（最多 50 隻，從 `data/stock_list.json` 讀取） |
+| 歷史資料長度 | **1 年**（從 Yahoo Finance 抓 `range=1y`） |
+| 移除股票時 | 系統以「本地最後收盤價」自動賣出持股，現金入帳 |
 
 ---
 
@@ -195,5 +201,34 @@ D   = D × (2/3) + K   × (1/3)
 | `getSignal()` 用 `ma5/ma20` 但指標產出 `ma_short/ma_long` | line 274-276 | MA 訊號永遠不觸發，PHP Warning | 改用正確 key |
 
 > 觸發場景：Dashboard 按鈕「手動執行交易」→ `fetch('stock_trader.php?run=1')` 一直 500。
+
+### 2026-08-07：股票清單動態化 + 歷史拉長至 1 年
+
+**新增**：
+- `stocks.php` — 股票清單維護頁（單筆新增 / 單筆移除 / 整批取代）
+- `stocks_api.php` — CRUD API（GET / POST / DELETE / PUT），上限 50 隻
+- `data/stock_list.json` — 動態清單（`examples/stock_list.example.json` 為範例）
+
+**改寫**：
+- `stock_trader.php` — 從 `stock_list.json` 動態讀取（不再寫死 10 隻）
+- `stock_trader.py` — 同上，**注意**：因 module load 順序，`load_stock_list()` 必須在 `load_json()` 定義之後
+- 兩個引擎的 `getStockData` / `fetch_stock_data`：`range=30d` / `period=6mo` → **`range=1y` / `period=1y`**
+
+**移除股票時自動結算**：
+- 從清單移除某股票 → 系統從 `stock_data.json` 取「該股最後一筆收盤價」
+- 對**所有策略帳戶**的該股持股執行「以現價賣出」
+- 現金入帳、移除 holdings、記一筆 SELL 交易
+- 整批取代時也會逐筆結算被移除的股票
+
+**部署注意事項**：
+- `data/stock_list.json` 預設包含原 10 支股票（`gitignore` 排除）
+- `examples/stock_list.example.json` 提供完整 schema
+- `stock_data.json` 體積從 ~240KB → ~535KB（10 隻 × 244 筆 1 年資料）
+- 50 隻 × 244 筆 ≈ 2.5 MB，注意磁碟空間
+
+**測試驗證**：
+- 維護頁新增 `9999.TW`（測試用）後手動移除
+- 整批取代：把清單縮成 5 隻，被移除的 5 隻自動結算
+- 所有 endpoint（`?run=1` / `?update=1` / `?snapshot=1`）仍 200
 
 ---

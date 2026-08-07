@@ -17,6 +17,7 @@ ENV/
 
 # Local data — NEVER commit real portfolio / holdings
 data/
+stock_list.json
 portfolio.json
 stock_data.json
 profit_history.json

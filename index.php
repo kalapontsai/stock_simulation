@@ -86,6 +86,7 @@
             <button class="btn" style="background: #8957e5;" onclick="restoreSnapshot()">還原試算</button>
             <a href="/stock/indicator_settings.php" class="btn" style="background: #8957e5;" target="_blank">指標參數設定</a>
             <a href="/stock/profit_history.php" class="btn" style="background: #8957e5;" target="_blank">獲利歷史</a>
+            <a href="/stock/stocks.php" class="btn" style="background: #1f6feb;" target="_blank">股票清單維護</a>
             <a href="/stock/data/stock_data.json" class="btn" style="background: #1f6feb;" target="_blank">歷史資料</a>
         </div>
 

@@ -18,18 +18,8 @@ $strategyNames = [
 
 // 設定
 $config = [
-    'stocks' => [
-        '0050.TW',    // 元大台灣50
-        '006208.TW',  // 富邦台灣50
-        '0056.TW',    // 元大高股息
-        '00919.TW',   // 群益台灣精選高股息
-        '2330.TW',    // 台積電
-        '3711.TW',   // 聯發科
-        '2412.TW',   // 中華電
-        '2881.TW',   // 富邦金
-        '2885.TW',   // 、元大金
-        '2891.TW'    // 中信金
-    ],
+    // 從 data/stock_list.json 動態讀取（維護頁面在 stocks.php）
+    'stock_list_file' => __DIR__ . '/data/stock_list.json',
     'initial_capital' => 1000000, // 初始資金 100萬
     'data_file' => __DIR__ . '/stock_data.json',
     'portfolio_file' => __DIR__ . '/portfolio.json',
@@ -39,9 +29,25 @@ $config = [
     'log_file' => __DIR__ . '/data/trade.log'
 ];
 
+
+// 讀取股票清單（從維護頁面維護的 stock_list.json）
+function loadStockList($config) {
+    $file = $config['stock_list_file'];
+    if (!file_exists($file)) {
+        echo "警告: 找不到股票清單 $file\n";
+        return [];
+    }
+    $data = json_decode(file_get_contents($file), true);
+    if (!is_array($data) || !isset($data['stocks'])) {
+        echo "警告: 股票清單格式錯誤\n";
+        return [];
+    }
+    return $data['stocks'];
+}
+
 // 取得股票資料
 function getStockData($symbol) {
-    $url = "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?interval=1d&range=30d";
+    $url = "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?interval=1d&range=1y";
 
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
@@ -352,6 +358,14 @@ function calculatePortfolioValue($portfolio, $prices) {
     }
 
     return $value;
+}
+
+// 動態載入股票清單（覆寫 \$config['stocks']）
+$config['stocks'] = loadStockList($config);
+
+if (empty($config['stocks'])) {
+    echo "錯誤: 股票清單為空，請到 stocks.php 維護\n";
+    exit(1);
 }
 
 // 主程式
