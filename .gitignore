@@ -45,3 +45,10 @@ downloads/
 reports/
 output/
 *.html.bak
+# ============================================================
+# Deployment configs (per-instance, do not commit)
+# ============================================================
+# Apache per-directory config — each deploy site needs its own
+.htaccess
+.htpasswd
+*.test
