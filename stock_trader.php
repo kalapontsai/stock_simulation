@@ -308,15 +308,49 @@ function getSignal($indicators) {
     return $signals;
 }
 
+// 計算交易成本（證交稅 + 券商手續費）
+// $action: 'BUY' or 'SELL'
+// $total: 成交金額（price × quantity）
+// $tax_cfg: ['sell' => 0.3, 'buy' => 0]  // 百分比 (e.g. 0.3 = 3/1000)
+// $fee_cfg: ['rate' => 0.1425, 'discount' => 28, 'min' => 20]
+// 回傳 ['tax' => 稅額, 'fee' => 手續費, 'net' => 淨額]
+function calcTradeCost($action, $total, $tax_cfg, $fee_cfg) {
+    // 證交稅：依買/賣決定稅率
+    $taxRate = $action === 'BUY' ? ($tax_cfg['buy'] ?? 0) : ($tax_cfg['sell'] ?? 0);
+    $tax = $total * ($taxRate / 100);  // rate 是百分比，轉小數
+
+    // 券商手續費：基本費率 × 折扣，最低 min
+    $feeRate = ($fee_cfg['rate'] ?? 0) * ($fee_cfg['discount'] ?? 100) / 100;
+    $fee = max($fee_cfg['min'] ?? 0, $total * ($feeRate / 100));
+
+    return [
+        'tax' => round($tax, 2),
+        'fee' => round($fee, 2),
+    ];
+}
+
 // 執行交易
-function executeTrade(&$portfolio, $stock, $action, $price, $quantity) {
+function executeTrade(&$portfolio, $stock, $action, $price, $quantity, $tax_fee = null) {
     global $config;
 
     $total = $price * $quantity;
 
+    // 取得稅費設定（從 indicator_settings.json 或用預設）
+    if ($tax_fee === null) {
+        $settings = loadIndicatorSettings(0);
+        $tax_fee = [
+            'tax' => $settings['tax'] ?? ['sell' => 0.3, 'buy' => 0],
+            'fee' => $settings['fee'] ?? ['rate' => 0.1425, 'discount' => 28, 'min' => 20],
+        ];
+    }
+
     if ($action === 'BUY') {
-        if ($portfolio['cash'] >= $total) {
-            $portfolio['cash'] -= $total;
+        // 計算成本（含稅 + 手續費）
+        $cost = calcTradeCost('BUY', $total, $tax_fee['tax'], $tax_fee['fee']);
+        $totalCost = $total + $cost['tax'] + $cost['fee'];
+
+        if ($portfolio['cash'] >= $totalCost) {
+            $portfolio['cash'] -= $totalCost;
             $portfolio['holdings'][$stock] = ($portfolio['holdings'][$stock] ?? 0) + $quantity;
             $portfolio['trades'][] = [
                 'date' => date('Y-m-d H:i:s'),
@@ -324,13 +358,20 @@ function executeTrade(&$portfolio, $stock, $action, $price, $quantity) {
                 'action' => 'BUY',
                 'price' => $price,
                 'quantity' => $quantity,
-                'total' => $total
+                'total' => $total,
+                'tax' => $cost['tax'],
+                'fee' => $cost['fee'],
+                'total_cost' => $totalCost
             ];
             return true;
         }
     } elseif ($action === 'SELL') {
         if (($portfolio['holdings'][$stock] ?? 0) >= $quantity) {
-            $portfolio['cash'] += $total;
+            // 計算成本（從收入扣稅 + 手續費）
+            $cost = calcTradeCost('SELL', $total, $tax_fee['tax'], $tax_fee['fee']);
+            $netIncome = $total - $cost['tax'] - $cost['fee'];
+
+            $portfolio['cash'] += $netIncome;
             $portfolio['holdings'][$stock] -= $quantity;
             $portfolio['trades'][] = [
                 'date' => date('Y-m-d H:i:s'),
@@ -338,7 +379,10 @@ function executeTrade(&$portfolio, $stock, $action, $price, $quantity) {
                 'action' => 'SELL',
                 'price' => $price,
                 'quantity' => $quantity,
-                'total' => $total
+                'total' => $total,
+                'tax' => $cost['tax'],
+                'fee' => $cost['fee'],
+                'net_income' => $netIncome
             ];
             return true;
         }

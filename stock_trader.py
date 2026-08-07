@@ -396,17 +396,51 @@ def get_signals(indicators: dict, settings: dict = None) -> list:
     return signals
 
 
-def execute_trade(portfolio: dict, stock: str, action: str, price: float, quantity: int) -> bool:
-    """執行交易"""
+def calc_trade_cost(action: str, total: float, tax_cfg: dict, fee_cfg: dict) -> dict:
+    """計算交易成本（證交稅 + 券商手續費）
+
+    Args:
+        action: 'BUY' or 'SELL'
+        total: 成交金額（price × quantity）
+        tax_cfg: {'sell': 0.3, 'buy': 0}  # 百分比 (e.g. 0.3 = 3/1000)
+        fee_cfg: {'rate': 0.1425, 'discount': 28, 'min': 20}
+
+    Returns:
+        {'tax': 稅額, 'fee': 手續費}
+    """
+    # 證交稅：依買/賣決定稅率
+    tax_rate = tax_cfg.get('buy' if action == 'BUY' else 'sell', 0)
+    tax = total * (tax_rate / 100)
+
+    # 券商手續費：基本費率 × 折扣，最低 min
+    fee_rate = (fee_cfg.get('rate', 0) * fee_cfg.get('discount', 100) / 100)
+    fee = max(fee_cfg.get('min', 0), total * (fee_rate / 100))
+
+    return {'tax': round(tax, 2), 'fee': round(fee, 2)}
+
+
+def execute_trade(portfolio: dict, stock: str, action: str, price: float, quantity: int, tax_fee: dict = None) -> bool:
+    """執行交易（含證交稅 + 手續費）"""
     total = price * quantity
     holdings = portfolio.get('holdings')
     if not isinstance(holdings, dict):
         # 相容舊版/異常資料：確保 holdings 一律為 dict
         portfolio['holdings'] = {}
 
+    # 取得稅費設定（從 indicator_settings.json 或用預設）
+    if tax_fee is None:
+        settings = load_indicator_settings(0)
+        tax_fee = {
+            'tax': settings.get('tax', {'sell': 0.3, 'buy': 0}),
+            'fee': settings.get('fee', {'rate': 0.1425, 'discount': 28, 'min': 20}),
+        }
+
     if action == 'BUY':
-        if portfolio['cash'] >= total:
-            portfolio['cash'] -= total
+        cost = calc_trade_cost('BUY', total, tax_fee['tax'], tax_fee['fee'])
+        total_cost = total + cost['tax'] + cost['fee']
+
+        if portfolio['cash'] >= total_cost:
+            portfolio['cash'] -= total_cost
             portfolio['holdings'][stock] = portfolio['holdings'].get(stock, 0) + quantity
             portfolio['trades'].append({
                 'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -414,12 +448,18 @@ def execute_trade(portfolio: dict, stock: str, action: str, price: float, quanti
                 'action': 'BUY',
                 'price': price,
                 'quantity': quantity,
-                'total': total
+                'total': total,
+                'tax': cost['tax'],
+                'fee': cost['fee'],
+                'total_cost': total_cost,
             })
             return True
     elif action == 'SELL':
         if portfolio['holdings'].get(stock, 0) >= quantity:
-            portfolio['cash'] += total
+            cost = calc_trade_cost('SELL', total, tax_fee['tax'], tax_fee['fee'])
+            net_income = total - cost['tax'] - cost['fee']
+
+            portfolio['cash'] += net_income
             portfolio['holdings'][stock] -= quantity
             if portfolio['holdings'][stock] <= 0:
                 del portfolio['holdings'][stock]
@@ -429,7 +469,10 @@ def execute_trade(portfolio: dict, stock: str, action: str, price: float, quanti
                 'action': 'SELL',
                 'price': price,
                 'quantity': quantity,
-                'total': total
+                'total': total,
+                'tax': cost['tax'],
+                'fee': cost['fee'],
+                'net_income': net_income,
             })
             return True
 

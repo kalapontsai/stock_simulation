@@ -228,7 +228,58 @@
                     </div>
                 </div>
             </div>
-            
+
+            <!-- 證交稅（證券交易稅） -->
+            <div class="indicator-section">
+                <div class="indicator-title">
+                    <span class="icon">&#128181;</span> 證交稅（證券交易稅）
+                </div>
+                <div class="indicator-desc">
+                    台灣法規：賣出一般股票收取 0.3%，國內股票型 ETF 0.1%（買入不收）。
+                    提高稅率可模擬頻繁交易的成本拖累。
+                </div>
+                <div class="param-grid">
+                    <div class="param-group">
+                        <div class="param-label">賣出稅率 (%)</div>
+                        <input type="number" class="param-input" id="tax_sell" min="0" max="1" step="0.01">
+                        <div class="param-hint">預設 0.3（即 3/1000）</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">買入稅率 (%)</div>
+                        <input type="number" class="param-input" id="tax_buy" min="0" max="1" step="0.01">
+                        <div class="param-hint">預設 0（台灣買入不收稅）</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 券商手續費 -->
+            <div class="indicator-section">
+                <div class="indicator-title">
+                    <span class="icon">&#128178;</span> 券商手續費
+                </div>
+                <div class="indicator-desc">
+                    公定費率上限 0.1425%，電子下單可折扣（2.8 折 = 28% 折扣）。
+                    最低 20 元（未滿 20 元仍收 20 元）。買賣均收。
+                </div>
+                <div class="param-grid">
+                    <div class="param-group">
+                        <div class="param-label">基本費率 (%)</div>
+                        <input type="number" class="param-input" id="fee_rate" min="0" max="1" step="0.001">
+                        <div class="param-hint">公定 0.1425</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">電子下單折扣 (%)</div>
+                        <input type="number" class="param-input" id="fee_discount" min="1" max="100" step="0.1">
+                        <div class="param-hint">2.8 折請填 28</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">最低手續費 (元)</div>
+                        <input type="number" class="param-input" id="fee_min" min="0" step="1">
+                        <div class="param-hint">預設 20</div>
+                    </div>
+                </div>
+            </div>
+
             <div class="buttons">
                 <button type="button" class="btn btn-primary" onclick="saveSettings()">儲存設定</button>
                 <button type="button" class="btn btn-secondary" onclick="resetToDefault()">重置為預設</button>
@@ -254,6 +305,8 @@
                     kd_overbought: 80,
                     ma_cross: true
                 }
+                tax: { sell: 0.3, buy: 0 },
+                fee: { rate: 0.1425, discount: 28, min: 20 }
             },
             default: {
                 ma: { short: 5, long: 20, long60: 60 },
@@ -268,6 +321,8 @@
                     kd_overbought: 80,
                     ma_cross: true
                 }
+                tax: { sell: 0.3, buy: 0 },
+                fee: { rate: 0.1425, discount: 28, min: 20 }
             },
             aggressive: {
                 ma: { short: 3, long: 10, long60: 30 },
@@ -282,6 +337,8 @@
                     kd_overbought: 85,
                     ma_cross: true
                 }
+                tax: { sell: 0.3, buy: 0 },
+                fee: { rate: 0.1425, discount: 28, min: 20 }
             },
             conservative: {
                 ma: { short: 10, long: 30, long60: 120 },
@@ -296,6 +353,8 @@
                     kd_overbought: 75,
                     ma_cross: true
                 }
+                tax: { sell: 0.3, buy: 0 },
+                fee: { rate: 0.1425, discount: 28, min: 20 }
             }
         };
         
@@ -339,6 +398,15 @@
                 document.getElementById('bollinger_period').value = data.bollinger.period || 20;
                 document.getElementById('bollinger_std_dev').value = data.bollinger.std_dev || 2;
             }
+            if (data.tax) {
+                document.getElementById('tax_sell').value = data.tax.sell ?? 0.3;
+                document.getElementById('tax_buy').value = data.tax.buy ?? 0;
+            }
+            if (data.fee) {
+                document.getElementById('fee_rate').value = data.fee.rate ?? 0.1425;
+                document.getElementById('fee_discount').value = data.fee.discount ?? 28;
+                document.getElementById('fee_min').value = data.fee.min ?? 20;
+            }
         }
         
         function loadPreset(name) {
@@ -376,6 +444,15 @@
                     kd_oversold: parseInt(document.getElementById('kd_oversold').value) || 20,
                     kd_overbought: parseInt(document.getElementById('kd_overbought').value) || 80,
                     ma_cross: document.getElementById('ma_cross').checked
+                },
+                tax: {
+                    sell: parseFloat(document.getElementById('tax_sell').value) || 0.3,
+                    buy: parseFloat(document.getElementById('tax_buy').value) || 0
+                },
+                fee: {
+                    rate: parseFloat(document.getElementById('fee_rate').value) || 0.1425,
+                    discount: parseFloat(document.getElementById('fee_discount').value) || 28,
+                    min: parseFloat(document.getElementById('fee_min').value) || 20
                 }
             };
         }
