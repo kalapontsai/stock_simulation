@@ -14,15 +14,28 @@
 ```
 stock_simulation/
 ├── README.md                         # 本檔
+├── LICENSE                           # MIT License
 ├── .gitignore                        # 排除真實資料、venv、快取
+│
+├── index.php                         # Dashboard（前端入口）
+├── profit_history.php                # 獲利曲線
+├── stock_history.php                 # 個股歷史圖
+├── indicator_settings.php            # 參數設定頁
+│
+├── stock_trader.php                  # 交易引擎（PHP 版，含網頁觸發 + CLI）
+├── stock_history_api.php             # 個股歷史 API
+├── indicator_settings_api.php        # 參數設定 API
+│
+├── stock_trader.py                   # 交易引擎（Python 版，CLI / Windows 排程）
 ├── run_simulation.py                 # 回測 / 試算入口
-├── stock_trader.py                   # 主交易引擎（CLI）
 ├── kd.py                             # KD 指標參考實作（EMA 平滑）
+│
 ├── examples/
 │   ├── indicator_settings.example.json   # 技術指標參數範例
 │   ├── portfolio.example.json            # 帳戶結構範例（空帳戶）
 │   ├── stock_data.example.json           # 股價資料格式（1 筆樣本）
 │   └── profit_history.example.json       # 損益歷史格式範例
+│
 └── scripts/                          # 預留：輔助腳本（批次、報表）
 ```
 
@@ -113,19 +126,37 @@ D   = D × (2/3) + K   × (1/3)
 
 ---
 
-## 與原 PHP 系統的差異
+## 與本地實例的差異
 
-本 repo **只搬 Python 部分**。以下項目刻意**不包含**：
+本 repo **包含完整的 Python + PHP 程式碼**，可單獨 clone 部署。差異：
 
-| 不包含 | 原因 |
-|--------|------|
-| `stock_trader.php` / `stock_dashboard.php` 等 PHP 檔 | 本 repo 聚焦 Python 邏輯 |
-| `portfolio.json` / `stock_data.json` 等真實資料 | 避免敏感資料外洩 |
-| `.venv/` | 環境依賴各自安裝 |
-| `downloads/Favorite_Remedies_for_Influenza_in_1919.pdf` | 與模擬無關 |
+| 項目 | 本 repo | 本地實例（`/stock/`） |
+|------|--------|---------------------|
+| 程式碼 | ✅ 全套 | ✅ 全套 |
+| 真實持股資料 | ❌ 不含（`.gitignore` 排除） | ✅ 含 |
+| 歷史股價 | ❌ 不含 | ✅ 含 |
+| Dashboard 入口檔名 | `index.php` | `index.php`（從 `stock_dashboard.php` 改名） |
 
-如需 PHP dashboard + 排程整合，請回到原路徑
-`D:\docker-volumn\ubuntu-apache2\html\stock\` 操作。
+### 本地實例對照
+
+> 本地實例路徑為個人環境，本 README 不寫死。詳見工作區 memory。
+
+**功能完全一致**，包含：
+- Dashboard / 個股歷史圖 / 獲利曲線 / 參數設定頁
+- 7 個 PHP 端點（4 個頁面 + 3 個 API）
+- Python CLI 交易引擎 + 回測
+- 兩個策略帳戶的快照暫存 / 還原
+
+### 部署到新機器
+
+1. **PHP 部分**：把 `*.php` 部署到 Apache docroot 下任一目錄，瀏覽器開啟 `index.php` 即為 Dashboard。
+2. **資料檔**：到部署目錄建立（或從本機實例複製）：
+   - `portfolio.json`（帳戶資料）
+   - `stock_data.json`（歷史股價，首次執行會自動從 Yahoo Finance 抓）
+   - `profit_history.json`（損益歷史）
+   - `daily_analysis.json`（每日分析）
+   - `data/indicator_settings.json`（參數設定）
+3. **Python 部分**：`pip install yfinance pandas` 後用 `stock_trader.py` / `run_simulation.py`。
 
 ---
 
@@ -135,5 +166,7 @@ D   = D × (2/3) + K   × (1/3)
 - **回測必跑 repro script**（依工作區政策）：改 ring / state / schema 後，用
   真實形狀資料灌一次關鍵 function 才算完成
 - **CSV / 報表四捨五入採 half-up**（5 永遠進位，不是 banker's rounding）
+- **Dashboard 入口 = `index.php`**：對應 Apache `DirectoryIndex`，部署到 `/stock/`
+  目錄時直接用 `/stock/` 即可，不需要 `/stock/index.php`
 
 ---
