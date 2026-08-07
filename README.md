@@ -1,14 +1,4 @@
 # Stock Simulation
-
-台灣股市模擬交易系統 — **純 Python 版本**，從
-`D:\docker-volumn\ubuntu-apache2\html\stock\` 的 PHP/Python 混合系統
-抽出 Python 模擬核心而成。
-
-> **這個 repo 是「乾淨的版本」**：只有程式邏輯，不含任何真實持股 / 歷史股價。
-> 真實運作的實例（含 dashboard、資料檔）保留在原路徑。
-
----
-
 ## 功能
 
 - 10 檔台股模擬：0050 / 006208 / 0056 / 00919 / 2330 / 3711 / 2412 / 2881 / 2885 / 2891
@@ -147,7 +137,3 @@ D   = D × (2/3) + K   × (1/3)
 - **CSV / 報表四捨五入採 half-up**（5 永遠進位，不是 banker's rounding）
 
 ---
-
-## 授權
-
-Private project — 僅限大大個人使用。
