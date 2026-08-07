@@ -20,6 +20,28 @@
         .stat-value { font-size: 28px; font-weight: bold; }
         .stat-value.positive { color: #3fb950; }
         .stat-value.negative { color: #f85149; }
+        .query-toolbar { display: flex; gap: 15px; align-items: end; margin-bottom: 20px; flex-wrap: wrap; }
+        .query-field { display: flex; flex-direction: column; gap: 5px; }
+        .query-field label { color: #8b949e; font-size: 13px; }
+        .query-field select, .query-field input { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 14px; min-width: 140px; }
+        .query-field select:focus, .query-field input:focus { outline: none; border-color: #58a6ff; }
+        .query-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; padding: 15px; background: #21262d; border-radius: 8px; }
+        .query-summary-item { text-align: center; }
+        .query-summary-label { color: #8b949e; font-size: 12px; margin-bottom: 5px; }
+        .query-summary-value { font-size: 18px; font-weight: bold; color: #c9d1d9; }
+        .query-summary-value.positive { color: #3fb950; }
+        .query-summary-value.negative { color: #f85149; }
+        .query-summary-value.cost { color: #d29922; }
+        .trade-table { width: 100%; border-collapse: collapse; }
+        .trade-table th { background: #30363d; padding: 10px; text-align: left; font-size: 13px; color: #8b949e; }
+        .trade-table td { padding: 8px 10px; border-bottom: 1px solid #30363d; font-size: 13px; }
+        .trade-buy td { border-left: 3px solid #3fb950; }
+        .trade-sell td { border-left: 3px solid #f85149; }
+        .trade-table .col-action-buy { color: #3fb950; font-weight: bold; }
+        .trade-table .col-action-sell { color: #f85149; font-weight: bold; }
+        .trade-table .col-cost { color: #d29922; }
+        .trade-table .col-net { font-weight: 600; }
+        .no-result { color: #8b949e; padding: 20px; text-align: center; }
     </style>
 </head>
 <body>
@@ -34,6 +56,43 @@
         </div>
 
         <a href="/stock/" class="back-link">返回 Dashboard</a>
+    </div>
+
+    <div class="container" style="margin-top: 30px;">
+        <h2>交易查詢</h2>
+        <p class="subtitle">依策略 + 日期範圍查詢每日損益與交易明細（整合稅費）</p>
+
+        <div class="query-toolbar">
+            <div class="query-field">
+                <label>策略</label>
+                <select id="qStrategy">
+                    <option value="策略1">策略1 (MA + RSI)</option>
+                    <option value="策略2">策略2 (KD)</option>
+                    <option value="__all" selected>全部</option>
+                </select>
+            </div>
+            <div class="query-field">
+                <label>起日</label>
+                <input type="date" id="qStart">
+            </div>
+            <div class="query-field">
+                <label>訖日</label>
+                <input type="date" id="qEnd">
+            </div>
+            <div class="query-field">
+                <label>&nbsp;</label>
+                <button class="btn" style="background:#238636;color:white;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;" onclick="runQuery()">查詢</button>
+            </div>
+            <div class="query-field">
+                <label>&nbsp;</label>
+                <button class="btn" style="background:#30363d;color:white;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;" onclick="resetQuery()">重置</button>
+            </div>
+        </div>
+
+        <div id="querySummary" class="query-summary"></div>
+        <div id="queryResult" class="chart-container">
+            <p class="no-result">請選擇條件後點查詢</p>
+        </div>
     </div>
 
     <div class="container" style="margin-top: 30px;">
@@ -175,6 +234,149 @@
         loadProfitHistory();
         loadDailyAnalysis();
         setInterval(loadProfitHistory, 60000);
+
+        // ============================================
+        // 交易查詢（依策略 + 日期範圍，整合稅費）
+        // ============================================
+        let _queryCache = null;
+
+        async function ensureQueryCache() {
+            if (_queryCache) return _queryCache;
+            const [ph, pf] = await Promise.all([
+                fetch('/stock/profit_history.json').then(r => r.json()),
+                fetch('/stock/portfolio.json').then(r => r.json())
+            ]);
+            _queryCache = { profitHistory: ph, portfolio: pf };
+            return _queryCache;
+        }
+
+        function fmtDate(d) {
+            // d 是 'YYYY-MM-DD' 或 'YYYY-MM-DD HH:MM:SS' 或 Date
+            if (!d) return '';
+            if (typeof d === 'string') return d.split(' ')[0];
+            return d.toISOString().slice(0, 10);
+        }
+
+        async function runQuery() {
+            const strategySel = document.getElementById('qStrategy').value;
+            const startDate = document.getElementById('qStart').value;
+            const endDate = document.getElementById('qEnd').value;
+
+            const { profitHistory, portfolio } = await ensureQueryCache();
+
+            // 1) 決定查詢的策略列表
+            const strategyList = strategySel === '__all' ? Object.keys(profitHistory) : [strategySel];
+
+            // 2) 收集該策略在範圍內的每日損益率
+            const dailyRows = [];
+            for (const strat of strategyList) {
+                const hist = profitHistory[strat] || {};
+                for (const [date, rate] of Object.entries(hist)) {
+                    if (startDate && date < startDate) continue;
+                    if (endDate && date > endDate) continue;
+                    dailyRows.push({ date, strategy: strat, profitRate: rate });
+                }
+            }
+            dailyRows.sort((a, b) => (a.date + a.strategy).localeCompare(b.date + b.strategy));
+
+            // 3) 收集交易明細（來自 portfolio.trades，按 date 前缀匹配）
+            const tradeRows = [];
+            for (const strat of strategyList) {
+                const pf = portfolio[strat];
+                if (!pf || !Array.isArray(pf.trades)) continue;
+                for (const t of pf.trades) {
+                    const tradeDate = fmtDate(t.date);
+                    if (startDate && tradeDate < startDate) continue;
+                    if (endDate && tradeDate > endDate) continue;
+                    tradeRows.push({ ...t, strategy: strat, tradeDate });
+                }
+            }
+            tradeRows.sort((a, b) => (b.tradeDate + b.date).localeCompare(a.tradeDate + a.date));
+
+            // 4) 計算 summary
+            const days = dailyRows.length;
+            const avgRate = days > 0 ? dailyRows.reduce((s, r) => s + r.profitRate, 0) / days : 0;
+            const totalTrades = tradeRows.length;
+            const totalCost = tradeRows.reduce((s, t) => s + ((t.tax ?? 0) + (t.fee ?? 0)), 0);
+
+            // 5) 渲染 summary
+            const avgClass = avgRate >= 0 ? 'positive' : 'negative';
+            document.getElementById('querySummary').innerHTML = `
+                <div class="query-summary-item">
+                    <div class="query-summary-label">查詢天數</div>
+                    <div class="query-summary-value">${days} 天</div>
+                </div>
+                <div class="query-summary-item">
+                    <div class="query-summary-label">平均日損益</div>
+                    <div class="query-summary-value ${avgClass}">${avgRate >= 0 ? '+' : ''}${avgRate.toFixed(2)}%</div>
+                </div>
+                <div class="query-summary-item">
+                    <div class="query-summary-label">交易筆數</div>
+                    <div class="query-summary-value">${totalTrades} 筆</div>
+                </div>
+                <div class="query-summary-item">
+                    <div class="query-summary-label">累計成本</div>
+                    <div class="query-summary-value cost">${formatNumber(Math.round(totalCost))}</div>
+                </div>
+            `;
+
+            // 6) 渲染交易表格
+            const resultDiv = document.getElementById('queryResult');
+            if (tradeRows.length === 0 && dailyRows.length === 0) {
+                resultDiv.innerHTML = '<p class="no-result">條件內查無資料</p>';
+                return;
+            }
+
+            let html = '<table class="trade-table"><thead><tr>';
+            html += '<th>日期</th><th>時間</th><th>策略</th><th>動作</th><th>股名</th>';
+            html += '<th style="text-align:right;">數量</th><th style="text-align:right;">價格</th>';
+            html += '<th style="text-align:right;">成交</th><th style="text-align:right;">稅</th><th style="text-align:right;">費</th>';
+            html += '<th style="text-align:right;">淨額</th><th>備註</th>';
+            html += '</tr></thead><tbody>';
+
+            for (const t of tradeRows) {
+                const total = t.total ?? (t.price * t.quantity);
+                const tax = t.tax ?? 0;
+                const fee = t.fee ?? 0;
+                const net = t.action === 'BUY' ? (t.total_cost ?? (total + tax + fee)) : (t.net_income ?? (total - tax - fee));
+                const timePart = t.date.split(' ')[1] || '';
+                const cls = t.action === 'BUY' ? 'trade-buy' : 'trade-sell';
+                const actionCls = t.action === 'BUY' ? 'col-action-buy' : 'col-action-sell';
+                const reason = t.reason || '';
+                html += `<tr class="${cls}">
+                    <td>${t.tradeDate}</td>
+                    <td>${timePart}</td>
+                    <td>${escapeHtml(t.strategy)}</td>
+                    <td class="${actionCls}">${t.action}</td>
+                    <td><b>${escapeHtml(t.stock || t.symbol || '')}</b></td>
+                    <td style="text-align:right;">${t.quantity}</td>
+                    <td style="text-align:right;">${Number(t.price).toFixed(2)}</td>
+                    <td style="text-align:right;">${formatNumber(Math.round(total))}</td>
+                    <td style="text-align:right;" class="col-cost">${formatNumber(Math.round(tax))}</td>
+                    <td style="text-align:right;" class="col-cost">${formatNumber(Math.round(fee))}</td>
+                    <td style="text-align:right;" class="col-net">${formatNumber(Math.round(net))}</td>
+                    <td>${escapeHtml(reason)}</td>
+                </tr>`;
+            }
+
+            if (tradeRows.length === 0) {
+                html += '<tr><td colspan="12" class="no-result">條件內沒有交易紀錄（但有 ${days} 天的損益率）</td></tr>'.replace('${days}', days);
+            }
+            html += '</tbody></table>';
+            resultDiv.innerHTML = html;
+        }
+
+        function resetQuery() {
+            document.getElementById('qStrategy').value = '__all';
+            document.getElementById('qStart').value = '';
+            document.getElementById('qEnd').value = '';
+            document.getElementById('querySummary').innerHTML = '';
+            document.getElementById('queryResult').innerHTML = '<p class="no-result">請選擇條件後點查詢</p>';
+        }
+
+        function escapeHtml(str) {
+            return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
 
         async function loadDailyAnalysis() {
             try {
