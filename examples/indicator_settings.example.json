@@ -1,0 +1,28 @@
+{
+  "_comment": "技術指標參數範例。每個參數為 [策略1值, 策略2值]，兩個策略可獨立調整。",
+  "ma": {
+    "short": [5, 10],
+    "long": [20, 30],
+    "long60": [60, 120]
+  },
+  "rsi": {
+    "period": [14, 21]
+  },
+  "kd": {
+    "period": [9, 14],
+    "k_smooth": [3, 3],
+    "d_smooth": [3, 3]
+  },
+  "macd": {
+    "fast": [12, 19],
+    "slow": [26, 39],
+    "signal": [9, 9]
+  },
+  "thresholds": {
+    "rsi_oversold": [30, 30],
+    "rsi_overbought": [70, 70],
+    "kd_oversold": [20, 20],
+    "kd_overbought": [80, 80],
+    "ma_cross": [true, true]
+  }
+}

@@ -1,0 +1,47 @@
+# ============================================================
+# Stock Simulation — Git Ignore
+# ============================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local data — NEVER commit real portfolio / holdings
+data/
+portfolio.json
+stock_data.json
+profit_history.json
+daily_analysis.json
+indicator_settings.json
+snapshot.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Downloads (stock/ project keeps unrelated PDFs)
+downloads/
+
+# Reports / output (keep only checked-in examples)
+reports/
+output/
+*.html.bak
