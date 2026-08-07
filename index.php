@@ -20,7 +20,7 @@
         .profit.positive { color: #3fb950; }
         .profit.negative { color: #f85149; }
 
-        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; }
+        .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
         .stat { background: #21262d; padding: 15px; border-radius: 8px; }
         .stat-label { color: #8b949e; font-size: 12px; margin-bottom: 5px; }
         .stat-value { font-size: 18px; font-weight: 600; }
@@ -39,6 +39,10 @@
         .trade-action { font-weight: bold; }
         .trade-action.buy { color: #3fb950; }
         .trade-action.sell { color: #f85149; }
+        .trade-cost { color: #8b949e; font-size: 11px; margin-top: 3px; font-family: monospace; }
+        .trade-cost .tax-fee { color: #d29922; }
+        .trade-cost .net { color: #c9d1d9; font-weight: 600; }
+        .trade-item { flex-direction: column; align-items: stretch; }
 
         .market { background: #161b22; border-radius: 12px; padding: 20px; border: 1px solid #30363d; }
         .market h2 { color: #58a6ff; margin-bottom: 20px; }
@@ -64,7 +68,7 @@
 
         @media (max-width: 768px) {
             .bots { grid-template-columns: 1fr; }
-            .stats { grid-template-columns: 1fr; }
+            .stats { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
@@ -163,6 +167,12 @@
                 const profit = currentValue - initialCapital;
                 const profitRate = (profit / initialCapital) * 100;
 
+                // 計算累計交易成本（證交稅 + 手續費）
+                let totalCost = 0;
+                for (const t of (data.trades || [])) {
+                    totalCost += (t.tax ?? 0) + (t.fee ?? 0);
+                }
+
                 html += `
                     <div class="bot-card">
                         <div class="bot-header">
@@ -187,6 +197,10 @@
                                 <div class="stat-label">總資產</div>
                                 <div class="stat-value">${formatNumber(currentValue)}</div>
                             </div>
+                            <div class="stat" style="border: 1px solid #d29922;">
+                                <div class="stat-label">累計交易成本</div>
+                                <div class="stat-value" style="color: #d29922;">${formatNumber(totalCost)}</div>
+                            </div>
                         </div>
                         <div class="holdings">
                             <h3>庫存</h3>
@@ -199,14 +213,33 @@
                         </div>
                         <div class="trades">
                             <h3>最近交易 (${data.trades?.length || 0} 筆)</h3>
-                            ${(data.trades || []).slice(-10).reverse().map(t => `
+                            ${(data.trades || []).slice(-10).reverse().map(t => {
+                                const total = t.total ?? (t.price * t.quantity);
+                                const tax = t.tax ?? 0;
+                                const fee = t.fee ?? 0;
+                                const hasCost = tax > 0 || fee > 0;
+                                const netIncome = t.net_income ?? (total - tax - fee);
+                                const totalCost = t.total_cost ?? (total + tax + fee);
+                                const displayNet = t.action === 'BUY' ? totalCost : netIncome;
+                                return `
                                 <div class="trade-item ${t.action === 'BUY' ? 'trade-buy' : 'trade-sell'}">
-                                    <span class="trade-action ${t.action.toLowerCase()}">${t.action}</span>
-                                    <span>${escapeHtml(t.stock)}</span>
-                                    <span>${t.quantity} 股 @ ${Number(t.price).toFixed(2)}</span>
-                                    <span>${t.date.split(' ')[0]}</span>
+                                    <div style="display: flex; justify-content: space-between;">
+                                        <span class="trade-action ${t.action.toLowerCase()}">${t.action}</span>
+                                        <span>${escapeHtml(t.stock)}</span>
+                                        <span>${t.quantity} 股 @ ${Number(t.price).toFixed(2)}</span>
+                                        <span>${t.date.split(' ')[0]}</span>
+                                    </div>
+                                    ${hasCost ? `
+                                    <div class="trade-cost">
+                                        成交: ${formatNumber(Math.round(total))} |
+                                        <span class="tax-fee">稅: ${formatNumber(Math.round(tax))}</span> |
+                                        <span class="tax-fee">費: ${formatNumber(Math.round(fee))}</span> |
+                                        <span class="net">${t.action === 'BUY' ? '總成本' : '實收'}: ${formatNumber(Math.round(displayNet))}</span>
+                                    </div>
+                                    ` : ''}
                                 </div>
-                            `).join('') || '<div style="color: #8b949e;">尚無交易</div>'}
+                                `;
+                            }).join('') || '<div style="color: #8b949e;">尚無交易</div>'}
                         </div>
                     </div>
                 `;
