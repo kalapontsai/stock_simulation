@@ -109,6 +109,14 @@
             '策略2': { label: 'RSI 均值回歸策略', color: '#f778ba' }
         };
 
+        function formatNumber(num) {
+            return new Intl.NumberFormat('zh-TW').format(Math.round(num));
+        }
+
+        function escapeHtml(str) {
+            return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
         async function loadProfitHistory() {
             try {
                 const [historyRes, stockRes] = await Promise.all([
@@ -374,9 +382,6 @@
             document.getElementById('queryResult').innerHTML = '<p class="no-result">請選擇條件後點查詢</p>';
         }
 
-        function escapeHtml(str) {
-            return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        }
 
         async function loadDailyAnalysis() {
             try {
