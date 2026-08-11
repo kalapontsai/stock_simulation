@@ -9,6 +9,7 @@
 """
 
 import json
+import math
 import sys
 import argparse
 from datetime import datetime
@@ -24,13 +25,20 @@ except ImportError:
 
 # 設定
 
-STRATEGIES = ['策略1', '策略2']
+STRATEGIES = ['策略1', '策略2', '手動操作']
 STRATEGY_NAMES = {
     '策略1': 'MA + RSI 混合策略',
-    '策略2': 'KD 隨機指標策略'
+    '策略2': 'KD 隨機指標策略',
+    '手動操作': '使用者手動操作（不自動下單）'
 }
 
-INITIAL_CAPITAL = 1_000_000
+INITIAL_CAPITAL = 5_000_000
+
+# 最小交易限制（避免小額交易導致手續費比例過高）
+# 買進：金額取 max(半倉, 10000, 100股×現價)
+# 賣出：股數取 max(持倉/2, max(1, ceil(10000/現價), 100))
+MIN_TRADE_AMOUNT = 10_000   # 最小交易金額（元）
+MIN_TRADE_SHARES = 100      # 最小交易股數（張數）
 
 # 檔案路徑 - Windows 環境
 STOCK_DIR = Path(__file__).parent
@@ -508,13 +516,8 @@ def has_traded_today(portfolio: dict, stock: str) -> bool:
     return False
 
 
-def run_strategy(strategy_name: str, portfolio: dict, stock: str, signals: list,
-                 current_price: float, cash: float, holdings: int) -> dict:
-    """執行策略並返回交易結果"""
-    if has_traded_today(portfolio, stock):
-        return {'action': 'NONE', 'reason': '今日已交易過此股票'}
-
-    # 根據策略分類買進/賣出訊號
+def classify_signals(strategy_name: str, signals: list) -> tuple:
+    """根據策略分類買進/賣出訊號。回傳 (buy_signals, sell_signals)。"""
     if strategy_name == '策略1':
         # 策略1：MA + RSI + MACD 混合
         buy_signals = [s for s in signals if s in ['MA_GOLDEN', 'RSI_OVERSOLD', 'MACD_BUY']]
@@ -523,46 +526,179 @@ def run_strategy(strategy_name: str, portfolio: dict, stock: str, signals: list,
         # 策略2：KD 隨機指標 (K < 20 買，K > 80 賣)
         buy_signals = [s for s in signals if s == 'KD_OVERSOLD']
         sell_signals = [s for s in signals if s == 'KD_OVERBOUGHT']
+    return buy_signals, sell_signals
 
-    result = {'action': 'NONE', 'reason': ''}
 
-    # 有庫存時，賣出訊號優先，避免同時出現多訊號時被買進訊號覆蓋
-    if holdings > 0 and sell_signals:
-        action = 'SELL'
-        trigger_signal = sell_signals[0]
-    elif buy_signals:
-        action = 'BUY'
-        trigger_signal = buy_signals[0]
-    elif sell_signals:
-        # 無庫存時出現賣出訊號，只記錄原因
-        result['reason'] = '無庫存可賣'
-        return result
-    else:
-        result['reason'] = '無買賣訊號'
-        return result
+def calc_sell_quantity(holdings: int, current_price: float) -> tuple:
+    """計算賣出股數（全賣）。回傳 (quantity, reason)。
+
+    規則：
+      - 庫存 <= 0 → (0, '無庫存可賣')
+      - 量必須達最小交易金額 (1萬 / 100股取高者)，否則 (0, reason)
+    """
+    if holdings <= 0:
+        return 0, '無庫存可賣'
+
+    quantity = holdings  # 100% 賣出（不保留倉位）
+    amount = quantity * current_price
+
+    # 最小交易金額檢查
+    min_shares_by_amount = math.ceil(MIN_TRADE_AMOUNT / current_price)
+    min_sell_shares = max(1, min_shares_by_amount, MIN_TRADE_SHARES)
+    if quantity < min_sell_shares:
+        return 0, f'庫存不足最小交易股數 ({min_sell_shares} 股)'
+
+    return quantity, ''
+
+
+def calc_buy_quantity(target_amount: float, current_price: float, cash: float) -> tuple:
+    """計算買進股數。回傳 (quantity, reason)。
+
+    規則（兩段式平均分配）：
+      - target_amount = 總現金 / 買進標的數量（已在 main() 平均分好）
+      - qty = floor(target_amount / price)
+      - 若 qty * price + 手續費 > cash → 跳過（現金不足）
+      - 若 qty * price < 最小交易金額 (1萬 / 100股) → 跳過（量太少）
+
+    Args:
+        target_amount: 本標的被分配到的金額
+        current_price: 現價
+        cash: 目前帳戶現金
+    """
+    if cash < current_price:
+        return 0, f'現金不足 ({cash:,.0f})'
+
+    quantity = int(target_amount / current_price)
+    if quantity <= 0:
+        return 0, f'分配金額不足 1 股 ({int(target_amount):,} 元)'
+
+    # 預估手續費（採最大保守值）
+    estimated_fee = max(20, quantity * current_price * 0.1425 * 28 / 10000)
+    if quantity * current_price + estimated_fee > cash:
+        return 0, f'現金不足以支付交易金額 + 手續費 ({cash:,.0f})'
+
+    # 最小交易金額檢查（1萬 或 100股，取高者）
+    if quantity < MIN_TRADE_SHARES:
+        return 0, f'股數 ({quantity}) 不足最小交易股數 ({MIN_TRADE_SHARES})'
+    if quantity * current_price < MIN_TRADE_AMOUNT:
+        return 0, f'金額 ({quantity * current_price:,.0f}) 不足最小交易金額 ({MIN_TRADE_AMOUNT:,} 元)'
+
+    return quantity, ''
+
+
+def execute_strategy_action(strategy_name: str, portfolio: dict, stock: str,
+                             action: str, current_price: float,
+                             target_amount: float = 0) -> dict:
+    """執行單一交易動作（BUY 或 SELL）。
+
+    Args:
+        strategy_name: 策略名稱
+        portfolio: 帳戶 dict（會被 in-place 修改）
+        stock: 股票代號
+        action: 'BUY' or 'SELL'
+        current_price: 現價
+        target_amount: 買進金額（僅 BUY 用，賣出忽略）
+    """
+    # has_traded_today 只擋買進（同一支股票當天只能買一次）
+    # 賣出不受限，避免同日買進後賣出被擋
+    if action == 'BUY' and has_traded_today(portfolio, stock):
+        return {'action': 'NONE', 'reason': '今日已交易過此股票'}
+
+    cash = portfolio['cash']
+    holdings = portfolio['holdings'].get(stock, 0)
 
     if action == 'BUY':
-        if cash < current_price:
-            result['reason'] = f'現金不足 ({cash:,.0f})'
-            return result
-        quantity = int(cash / current_price / 2)
+        quantity, reason = calc_buy_quantity(target_amount, current_price, cash)
+        if quantity <= 0:
+            return {'action': 'NONE', 'reason': reason}
+    elif action == 'SELL':
+        quantity, reason = calc_sell_quantity(holdings, current_price)
+        if quantity <= 0:
+            return {'action': 'NONE', 'reason': reason}
     else:
-        if holdings <= 0:
-            result['reason'] = '無庫存可賣'
-            return result
-        quantity = max(1, holdings // 2)
+        return {'action': 'NONE', 'reason': f'未知動作: {action}'}
 
-    if quantity > 0 and execute_trade(portfolio, stock, action, current_price, quantity):
-        result = {
+    if execute_trade(portfolio, stock, action, current_price, quantity):
+        return {
             'action': action,
             'quantity': quantity,
             'price': current_price,
-            'reason': f'成交 ({trigger_signal})'
+            'reason': f'成交 ({quantity} 股 @ {current_price})',
+        }
+    return {'action': 'NONE', 'reason': '執行失敗'}
+
+
+# 訊號代碼 → 中文（profit_history.php 顯示用）
+SIGNAL_LABELS = {
+    'MA_GOLDEN': 'MA黃金交叉',
+    'MA_DEAD': 'MA死亡交叉',
+    'RSI_OVERSOLD': 'RSI超賣',
+    'RSI_OVERBOUGHT': 'RSI超買',
+    'MACD_BUY': 'MACD買進',
+    'MACD_SELL': 'MACD賣出',
+    'KD_OVERSOLD': 'KD超賣',
+    'KD_OVERBOUGHT': 'KD超買',
+}
+
+
+def _record_strategy_result(daily_analysis, strategy_name, stock, result, trigger):
+    """記錄單一交易的最終結果到 daily_analysis。
+
+    result 是 execute_strategy_action() 回傳的 dict。
+    把 PENDING 狀態寫入「人類可讀的最終狀態」。
+    """
+    signals_zh = SIGNAL_LABELS.get(trigger, trigger)
+    if result['action'] in ('BUY', 'SELL'):
+        qty = result['quantity']
+        price = result['price']
+        daily_analysis[stock]['strategies'][strategy_name] = {
+            'action': result['action'],
+            'quantity': qty,
+            'price': price,
+            'signal': trigger,
+            'signal_zh': signals_zh,
+            'reason': f'成交 {qty} 股 @ {price:.2f} ({signals_zh})',
         }
     else:
-        result['reason'] = '庫存不足或交易失敗'
+        reason = result['reason']
+        daily_analysis[stock]['strategies'][strategy_name] = {
+            'action': 'NONE',
+            'signal': trigger,
+            'signal_zh': signals_zh,
+            'reason': f'跳過 ({signals_zh} 觸發)：{reason}',
+        }
 
-    return result
+
+def _record_strategy_result_none(daily_analysis, strategy_name, stock):
+    """記錄「階段 1 該策略對此標的沒被加入 targets」的結果。"""
+    info = daily_analysis[stock]['strategies'].get(strategy_name, {})
+    if not info.get('_pending'):
+        return  # 已經記錄過（BUY/SELL/SKIP），略過
+    signals = info.get('signals', [])
+    had_holdings = info.get('had_holdings', False)
+    buy_sigs = info.get('buy_signals', [])
+    sell_sigs = info.get('sell_signals', [])
+
+    # 決定 reason
+    if signals:
+        sig_text = '、'.join(SIGNAL_LABELS.get(s, s) for s in signals)
+    else:
+        sig_text = '無訊號'
+
+    if buy_sigs:
+        reason = f'已有庫存，跳過買進訊號'
+    elif sell_sigs:
+        reason = f'無庫存可賣 ({sig_text})'
+    elif not signals:
+        reason = '無買賣訊號'
+    else:
+        reason = f'未達下單條件 ({sig_text})'
+
+    daily_analysis[stock]['strategies'][strategy_name] = {
+        'action': 'NONE',
+        'reason': reason,
+        'signals': signals,
+    }
 
 
 def show_status():
@@ -668,6 +804,9 @@ def main():
     current_prices = {}
     daily_analysis = {}
 
+    # 兩段式下單：階段 1 收集 buy/sell targets，階段 2 依序執行
+    pending_targets = {s: {'buy': [], 'sell': []} for s in STRATEGIES if s != '手動操作'}
+
     # 取得所有股票資料
     for symbol in STOCKS:
         print(f"抓取 {symbol} ...")
@@ -687,12 +826,20 @@ def main():
             all_data[symbol] = prices
             print(f"  最新價格: {current_prices[symbol]:.2f}")
 
-            # 完整交易模式：執行技術分析與交易
+            # 完整交易模式：兩段式下單
+            #   階段 1（下方 for-stock-loop）：抓資料、計算訊號、但不下單
+            #   階段 2（下方 for-strategy-loop）：先賣後買、平均分配 cash
+            # 不再即時下單，避免半倉遞減導致前面買太重、後面無錢
             if not is_update_only:
                 daily_analysis[symbol] = {'strategies': {}}
 
-                # 每個策略只執行一次，避免重複下單造成同日買賣矛盾
+                # 階段 1：每個策略只看一次訊號（供階段 2 使用）
+                # 結構: strategy_signals[strategy_name] = {'buy': [...], 'sell': [...], 'price': float, 'signals': [...]}
+                strategy_signals = {}
+
                 for idx, strategy_name in enumerate(STRATEGIES):
+                    if strategy_name == '手動操作':
+                        continue
                     settings = load_indicator_settings(idx)
                     indicators = calculate_indicators(prices, settings)
                     signals = get_signals(indicators, settings)
@@ -715,34 +862,110 @@ def main():
                             'thresholds': settings.get('thresholds', {})
                         })
 
+                    buy_sig, sell_sig = classify_signals(strategy_name, signals)
+                    strategy_signals[strategy_name] = {
+                        'buy': buy_sig,
+                        'sell': sell_sig,
+                        'price': current_prices[symbol],
+                        'signals': signals,
+                    }
+
+                # 存到外層 dict，供階段 2 使用
+                for strategy_name, info in strategy_signals.items():
+                    if strategy_name not in pending_targets:
+                        pending_targets[strategy_name] = {'buy': [], 'sell': []}
+                    # 有庫存 + 賣出訊號 → 加入賣出清單
                     portfolio = all_portfolios[strategy_name]
                     holdings_data = portfolio.get('holdings', {})
-                    if isinstance(holdings_data, dict):
-                        holdings = holdings_data.get(symbol, 0)
-                    else:
-                        holdings = 0
+                    if not isinstance(holdings_data, dict):
+                        holdings_data = {}
+                    holdings = holdings_data.get(symbol, 0)
 
-                    result = run_strategy(
-                        strategy_name,
-                        portfolio,
-                        symbol,
-                        signals,
-                        current_prices[symbol],
-                        portfolio['cash'],
-                        holdings
-                    )
-
-                    daily_analysis[symbol]['strategies'][strategy_name] = result
-
-                    if result['action'] != 'NONE':
-                        print(f"  [{strategy_name}] {result['action']} {result['quantity']} 股 {symbol} @ {result['price']:.2f}")
-                    else:
-                        print(f"  [{strategy_name}] 跳過: {result['reason']}")
+                    if holdings > 0 and info['sell']:
+                        pending_targets[strategy_name]['sell'].append({
+                            'stock': symbol,
+                            'price': info['price'],
+                            'qty': holdings,
+                            'trigger': info['sell'][0],
+                        })
+                    elif info['buy'] and holdings == 0:
+                        pending_targets[strategy_name]['buy'].append({
+                            'stock': symbol,
+                            'price': info['price'],
+                            'trigger': info['buy'][0],
+                        })
+                    # daily_analysis 暫存階段 1 訊號，階段 2 跑完才寫最終結果
+                    # 避免 PENDING 這種中間狀態被誤讀
+                    daily_analysis[symbol]['strategies'][strategy_name] = {
+                        '_pending': True,    # 標記，階段 2 結束後寫入
+                        'signals': info['signals'],
+                        'buy_signals': info['buy'],
+                        'sell_signals': info['sell'],
+                        'had_holdings': holdings > 0,
+                    }
         else:
             # 無法取得資料時顯示錯誤
             print(f"  [錯誤] 無法取得 {symbol} 資料")
 
         print()
+
+    # ============================================================
+    # 階段 2：兩段式下單 — 先賣後買、平均分配
+    # ============================================================
+    if not is_update_only:
+        has_targets = any(pending_targets[s]['buy'] or pending_targets[s]['sell'] for s in pending_targets)
+        if has_targets:
+            print("\n=== 階段 2：兩段式下單 ===")
+        for strategy_name in STRATEGIES:
+            if strategy_name == '手動操作':
+                continue
+            targets = pending_targets.get(strategy_name, {'buy': [], 'sell': []})
+            portfolio = all_portfolios[strategy_name]
+
+            # 2a. 先賣（賣出回收現金是好事）
+            if targets['sell']:
+                print(f"\n[{strategy_name}] 賣出 ({len(targets['sell'])} 個標的):")
+            for t in targets['sell']:
+                result = execute_strategy_action(
+                    strategy_name, portfolio, t['stock'], 'SELL', t['price']
+                )
+                # 記錄結果到 daily_analysis
+                _record_strategy_result(daily_analysis, strategy_name, t['stock'], result, t['trigger'])
+                if result['action'] == 'SELL':
+                    print(f"  ✅ SELL {t['stock']} {result['quantity']} 股 @ {result['price']:.2f} (觸發: {t['trigger']})")
+                else:
+                    print(f"  ⏭️  SELL {t['stock']} 跳過: {result['reason']}")
+
+            # 2b. 平均分配 cash 給 buy 清單
+            buy_list = targets['buy']
+            if not buy_list:
+                # 即使沒買進訊號，也要記錄 NONE 給所有「階段 1 沒被選中」的標的
+                for symbol in daily_analysis:
+                    strat_info = daily_analysis[symbol].get('strategies', {}).get(strategy_name)
+                    if strat_info and strat_info.get('_pending'):
+                        _record_strategy_result_none(daily_analysis, strategy_name, symbol)
+                continue
+
+            # cash 已扣除賣出回收，重新讀現值
+            available_cash = portfolio['cash']
+            per_target = available_cash / len(buy_list)
+            print(f"\n[{strategy_name}] 買進 ({len(buy_list)} 個標的), 現金 {available_cash:,.0f} 平均分配 {per_target:,.0f}/標的:")
+
+            for t in buy_list:
+                result = execute_strategy_action(
+                    strategy_name, portfolio, t['stock'], 'BUY', t['price'], per_target
+                )
+                _record_strategy_result(daily_analysis, strategy_name, t['stock'], result, t['trigger'])
+                if result['action'] == 'BUY':
+                    print(f"  ✅ BUY {t['stock']} {result['quantity']} 股 @ {result['price']:.2f} (觸發: {t['trigger']})")
+                else:
+                    print(f"  ⏭️  BUY {t['stock']} 跳過: {result['reason']}")
+
+            # 把「階段 1 沒被加入 targets 的標的」補上 NONE（例：沒有買賣訊號的）
+            for symbol in daily_analysis:
+                strat_info = daily_analysis[symbol].get('strategies', {}).get(strategy_name)
+                if strat_info and strat_info.get('_pending'):
+                    _record_strategy_result_none(daily_analysis, strategy_name, symbol)
 
     # 完整交易模式：計算績效
     if not is_update_only:

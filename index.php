@@ -85,12 +85,13 @@
         </div>
 
         <div style="text-align: center;">
-            <button class="btn" onclick="runTrader()">手動執行交易</button>
+            <button class="btn" style="background: #f85149;" onclick="resetAutoAccounts()">清空自動帳戶</button>
             <button class="btn" style="background: #1f6feb;" onclick="saveSnapshot()">暫存試算</button>
             <button class="btn" style="background: #8957e5;" onclick="restoreSnapshot()">還原試算</button>
             <a href="/stock/indicator_settings.php" class="btn" style="background: #8957e5;" target="_blank">指標參數設定</a>
             <a href="/stock/profit_history.php" class="btn" style="background: #8957e5;" target="_blank">獲利歷史</a>
             <a href="/stock/stocks.php" class="btn" style="background: #1f6feb;" target="_blank">股票清單維護</a>
+            <a href="/stock/manual_trade.php" class="btn" style="background: #6e40c9;" target="_blank">手動投資</a>
             <a href="/stock/data/stock_data.json" class="btn" style="background: #1f6feb;" target="_blank">歷史資料</a>
         </div>
 
@@ -353,16 +354,20 @@
             document.getElementById('stocks').innerHTML = html || '<div style="color: #8b949e; padding: 20px;">無股票資料</div>';
         }
 
-        function runTrader() {
-            fetch('/stock/stock_trader.php?run=1')
-                .then(r => r.text())
-                .then(text => {
-                    alert('交易執行完成！請重新整理頁面查看結果。');
-                    loadData();
+        // 交易由 autoloop.bat 排程執行，dashboard 不再提供手動觸發按鈕
+        function resetAutoAccounts() {
+            if (!confirm('確定要清空自動帳戶嗎？\n\n策略1、策略2 會重置為現金 NT$ 5,000,000，庫存與交易紀錄全部清空。\n手動帳戶不受影響。')) return;
+            fetch('/stock/manual_trade.php?action=api_reset_auto')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.ok) {
+                        alert(data.message);
+                        loadData();
+                    } else {
+                        alert('重置失敗: ' + data.error);
+                    }
                 })
-                .catch(err => {
-                    alert('執行失敗: ' + err);
-                });
+                .catch(err => alert('重置失敗: ' + err));
         }
 
         function showModal(title, message, descHtml = '') {
