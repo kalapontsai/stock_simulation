@@ -125,6 +125,81 @@ python stock_trader.py --status
 
 ---
 
+## 自動排程與股價更新
+
+### Windows 工作排程器（生產環境）
+
+部署環境使用 **Windows Task Scheduler** 跑每日交易：
+
+| 項目 | 設定 |
+|------|------|
+| 工作名稱 | `\stock_simulation` |
+| 排程類型 | 週一至週五（`MON, TUE, WED, THU, FRI`） |
+| 執行時間 | **每日 13:40**（台股收盤後 10 分鐘） |
+| 超時設定 | 72 小時自動停止（保護，避免無限 loop） |
+| 執行指令 | `<部署根目錄>/autoloop.bat`（範例：`D:\path\to\stock\autoloop.bat`） |
+| Python 環境 | 該路徑下的 `.venv\Scripts\python.exe`（獨立 venv） |
+| 起始日期 | 2026/4/21 |
+
+### autoloop.bat 內容
+
+```bat
+@echo off
+chcp 65001 >nul
+cd /d "<部署根目錄>"
+".venv\Scripts\python.exe" stock_trader.py
+```
+
+> `chcp 65001` 設 UTF-8，避免中文輸出亂碼。
+
+### 股價更新時機
+
+`stock_trader.py` 無參數預設行為：
+
+1. **階段 0**：從 Yahoo Finance 抓 10 檔最新 1 年資料（含當日），寫入 `data/stock_data.json`
+2. **階段 1**：計算技術指標、偵測買賣訊號
+3. **階段 2**：依訊號執行兩段式下單（先賣後買）
+4. **階段 3**：寫入 `daily_analysis.json`（每日分析）、計算績效、寫 `profit_history.json`
+
+> **重點：每日 13:40 跑一次**，當日 09:00–13:30 盤中價格變動**不會被即時記錄**。
+> 隔天才會反映。
+
+### 為什麼不是盤中即時
+
+- 台股 09:00–13:30 盤中，本系統 **不** 即時抓價 / 即時下單
+- 13:40 抓的是「當日收盤價」（Yahoo Finance 在收盤後 ~5–10 分鐘更新完成）
+- **一天一次** 適合長期持有 + 技術指標策略，不適合日內 / 頻頻進出場
+
+### 手動覆蓋排程
+
+三種方式（會跟排程結果**合併**，不是覆蓋）：
+
+```bash
+# 1. 只更新股價，不下單
+python stock_trader.py --update
+
+# 2. 完整跑（更新股價 + 下單）
+python stock_trader.py
+
+# 3. 只看狀態
+python stock_trader.py --status
+```
+
+> ⚠️ 手動跑會在當天留下多筆交易 / 分析紀錄。
+> 排程 13:40 再跑一次會基於「現有 portfolio 狀態」繼續下單，**不會自動去重**。
+
+### 部署到新機器
+
+手動註冊工作排程器任務（PowerShell）：
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "D:\path\to\stock\autoloop.bat"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At 13:40
+Register-ScheduledTask -TaskName "\stock_simulation" -Action $action -Trigger $trigger -Description "Daily stock simulation runner"
+```
+
+---
+
 ## 技術指標公式
 
 ### KD（EMA 型平滑，與 kd.py 一致）
