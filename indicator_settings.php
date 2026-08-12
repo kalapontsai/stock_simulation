@@ -396,7 +396,7 @@
                     kd_oversold: 20,
                     kd_overbought: 80,
                     ma_cross: true
-                }
+                },
                 tax: { sell: 0.3, buy: 0 },
                 fee: { rate: 0.1425, discount: 28, min: 20 }
             },
@@ -412,7 +412,7 @@
                     kd_oversold: 20,
                     kd_overbought: 80,
                     ma_cross: true
-                }
+                },
                 tax: { sell: 0.3, buy: 0 },
                 fee: { rate: 0.1425, discount: 28, min: 20 }
             },
@@ -428,7 +428,7 @@
                     kd_oversold: 15,
                     kd_overbought: 85,
                     ma_cross: true
-                }
+                },
                 tax: { sell: 0.3, buy: 0 },
                 fee: { rate: 0.1425, discount: 28, min: 20 }
             },
@@ -444,7 +444,7 @@
                     kd_oversold: 25,
                     kd_overbought: 75,
                     ma_cross: true
-                }
+                },
                 tax: { sell: 0.3, buy: 0 },
                 fee: { rate: 0.1425, discount: 28, min: 20 }
             }
