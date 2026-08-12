@@ -153,6 +153,18 @@ def load_indicator_settings(strategy_idx: int = 0) -> dict:
             'kd_oversold': get_thresh_val('kd_oversold') or 20,
             'kd_overbought': get_thresh_val('kd_overbought') or 80,
             'ma_cross': get_thresh_val('ma_cross') if get_thresh_val('ma_cross') is not None else True
+        },
+        # 資金配置（每策略獨立，存成陣列）
+        'position': {
+            'buy_unit_pct': get_nested_val('position', 'buy_unit_pct') or 20,
+            'sell_unit_pct': get_nested_val('position', 'sell_unit_pct') or 50,
+            'max_positions': get_nested_val('position', 'max_positions') or 5,
+            'min_cash_reserve_pct': get_nested_val('position', 'min_cash_reserve_pct') or 10,
+            'use_kd_strength': get_nested_val('position', 'use_kd_strength') if get_nested_val('position', 'use_kd_strength') is not None else False,
+            'kd_strength_max': get_nested_val('position', 'kd_strength_max') or 30,
+            # KD 強度公式參數（用於方案 B）
+            # strength = clamp((oversold_threshold - K) / kd_strength_max, 0, 1)
+            # K=oversold 時 strength=0，K=oversold-kd_strength_max 時 strength=1
         }
     }
 
@@ -574,8 +586,114 @@ def calc_buy_quantity(target_amount: float, current_price: float, cash: float) -
 
     # 預估手續費（採最大保守值）
     estimated_fee = max(20, quantity * current_price * 0.1425 * 28 / 10000)
-    if quantity * current_price + estimated_fee > cash:
-        return 0, f'現金不足以支付交易金額 + 手續費 ({cash:,.0f})'
+    # [NOTE 2026-08-12] 原本 line 577 的 `> cash` 是設計而非 bug：
+    #   - 在平均分配演算法下，cash = 總現金，target = per_target（一部分）
+    #   - cash >= target 永遠成立（除非現金已被前面交易花掉）
+    #   - 用 `> cash` 是「現金總額」守門，符合「帳戶不會被擊穿」的語意
+    #   - 例外：buy_list=1 且 target ≈ cash，會因為手續費擋下（合理）
+    # 為避免使用者困惑，訊息改為「現金 / 需要」對比。
+    total_cost = quantity * current_price + estimated_fee
+    if total_cost > cash:
+        return 0, f'現金不足以支付交易金額 + 手續費 (現金 {cash:,.0f}, 需要 {total_cost:,.0f})'
+
+    # 最小交易金額檢查（1萬 或 100股，取高者）
+    if quantity < MIN_TRADE_SHARES:
+        return 0, f'股數 ({quantity}) 不足最小交易股數 ({MIN_TRADE_SHARES})'
+    if quantity * current_price < MIN_TRADE_AMOUNT:
+        return 0, f'金額 ({quantity * current_price:,.0f}) 不足最小交易金額 ({MIN_TRADE_AMOUNT:,} 元)'
+
+    return quantity, ''
+
+
+def calc_kd_strength(k_value: float, kd_oversold: float, kd_strength_max: float) -> float:
+    """計算 KD 超賣強度（方案 B 用）。
+
+    strength = clamp((oversold_threshold - K) / kd_strength_max, 0, 1)
+      - K == oversold_threshold (例 K=20): strength = 0（剛觸發，不加碼）
+      - K < oversold_threshold (例 K=10): strength > 0（超賣越深，買越多）
+      - K >= oversold_threshold: strength = 0
+
+    Args:
+        k_value: 當前 K 值
+        kd_oversold: 超賣門檻（例 20）
+        kd_strength_max: 達到最大加碼的 K 偏移量（例 30，代表 K=-10 滿倉）
+
+    Returns:
+        strength 介於 [0, 1]
+    """
+    if kd_strength_max <= 0:
+        return 0.0
+    raw = (kd_oversold - k_value) / kd_strength_max
+    return max(0.0, min(1.0, raw))
+
+
+def calc_buy_quantity_v2(
+    strategy_name: str,
+    stock: str,
+    current_price: float,
+    cash: float,
+    total_portfolio_value: float,
+    buy_list_size: int,
+    settings: dict,
+    k_value: float = None
+) -> tuple:
+    """計算買進股數（方案 B：KD 強度加權）。
+
+    公式：
+      available_for_buy = total_portfolio_value × buy_unit_pct / 100
+      per_target = available_for_buy / max(buy_list_size, 1)
+      strength = calc_kd_strength(...)  # 策略2 或 use_kd_strength=True 才用
+      target_amount = per_target × (0.5 + 0.5 × strength)  # strength=0→半倉, strength=1→滿倉
+      qty = floor(target_amount / current_price)
+
+    Args:
+        strategy_name: '策略1' / '策略2'
+        stock: 股票代號
+        current_price: 現價
+        cash: 帳戶現金
+        total_portfolio_value: 帳戶總值（現金 + 持倉市值）
+        buy_list_size: 本次觸發買進的標的數
+        settings: load_indicator_settings() 回傳的 dict
+        k_value: 當前 K 值（策略2 用；策略1 為 None）
+
+    Returns:
+        (quantity, reason)
+    """
+    pos = settings.get('position', {}) if settings else {}
+    buy_unit_pct = pos.get('buy_unit_pct', 20)
+    use_kd_strength = pos.get('use_kd_strength', False)
+    kd_oversold = settings.get('thresholds', {}).get('kd_oversold', 20) if settings else 20
+    kd_strength_max = pos.get('kd_strength_max', 30)
+
+    if cash < current_price:
+        return 0, f'現金不足 ({cash:,.0f})'
+
+    if buy_list_size <= 0:
+        return 0, '無買進標的'
+
+    available_for_buy = total_portfolio_value * buy_unit_pct / 100
+    per_target = available_for_buy / buy_list_size
+
+    # 強度加權（僅策略2 或 use_kd_strength=True）
+    if (strategy_name == '策略2' or use_kd_strength) and k_value is not None:
+        strength = calc_kd_strength(k_value, kd_oversold, kd_strength_max)
+        # strength=0 → 0.5 × per_target（半倉起步，避免一觸發就滿倉）
+        # strength=1 → 1.0 × per_target（滿倉加碼）
+        target_amount = per_target * (0.5 + 0.5 * strength)
+    else:
+        target_amount = per_target
+
+    quantity = int(target_amount / current_price)
+    if quantity <= 0:
+        return 0, f'分配金額不足 1 股 ({int(target_amount):,} 元)'
+
+    # 預估手續費（採最大保守值）
+    estimated_fee = max(20, quantity * current_price * 0.1425 * 28 / 10000)
+    # [NOTE 2026-08-12] 同 calc_buy_quantity：用 cash 作為上限（不是 target），
+    # 保留原有「帳戶不會被擊穿」的語意。訊息改為「現金 / 需要」對比。
+    total_cost = quantity * current_price + estimated_fee
+    if total_cost > cash:
+        return 0, f'現金不足以支付交易金額 + 手續費 (現金 {cash:,.0f}, 需要 {total_cost:,.0f})'
 
     # 最小交易金額檢查（1萬 或 100股，取高者）
     if quantity < MIN_TRADE_SHARES:
@@ -588,7 +706,12 @@ def calc_buy_quantity(target_amount: float, current_price: float, cash: float) -
 
 def execute_strategy_action(strategy_name: str, portfolio: dict, stock: str,
                              action: str, current_price: float,
-                             target_amount: float = 0) -> dict:
+                             target_amount: float = 0,
+                             strategy_idx: int = 0,
+                             settings: dict = None,
+                             k_value: float = None,
+                             buy_list_size: int = 1,
+                             current_prices_dict: dict = None) -> dict:
     """執行單一交易動作（BUY 或 SELL）。
 
     Args:
@@ -597,7 +720,12 @@ def execute_strategy_action(strategy_name: str, portfolio: dict, stock: str,
         stock: 股票代號
         action: 'BUY' or 'SELL'
         current_price: 現價
-        target_amount: 買進金額（僅 BUY 用，賣出忽略）
+        target_amount: 買進金額（僅 BUY 用；賣出忽略；v2 為「參考值」）
+        strategy_idx: 策略索引（0=策略1, 1=策略2）— 給 v2 讀每策略參數
+        settings: load_indicator_settings() 回傳 — None 時函式內部自動載入
+        k_value: 當前 K 值（策略2 給 v2 算 KD 強度用）
+        buy_list_size: 本次同時觸發買進的標的數（給 v2 算 per_target 用）
+        current_prices_dict: 所有標的現價 dict（給 v2 算帳戶總值用）
     """
     # has_traded_today 只擋買進（同一支股票當天只能買一次）
     # 賣出不受限，避免同日買進後賣出被擋
@@ -608,7 +736,29 @@ def execute_strategy_action(strategy_name: str, portfolio: dict, stock: str,
     holdings = portfolio['holdings'].get(stock, 0)
 
     if action == 'BUY':
-        quantity, reason = calc_buy_quantity(target_amount, current_price, cash)
+        # [2026-08-12] 改用 v2 方案 B（KD 強度加權 + 每策略獨立參數）
+        # 若未提供 settings，自動載入
+        if settings is None:
+            settings = load_indicator_settings(strategy_idx)
+        # 計算帳戶總值（現金 + 持倉市值）
+        if current_prices_dict:
+            holdings_value = sum(
+                qty * current_prices_dict.get(s, 0)
+                for s, qty in portfolio.get('holdings', {}).items()
+            )
+        else:
+            holdings_value = 0
+        total_portfolio_value = cash + holdings_value
+        quantity, reason = calc_buy_quantity_v2(
+            strategy_name=strategy_name,
+            stock=stock,
+            current_price=current_price,
+            cash=cash,
+            total_portfolio_value=total_portfolio_value,
+            buy_list_size=buy_list_size,
+            settings=settings,
+            k_value=k_value
+        )
         if quantity <= 0:
             return {'action': 'NONE', 'reason': reason}
     elif action == 'SELL':
@@ -921,6 +1071,9 @@ def main():
                 continue
             targets = pending_targets.get(strategy_name, {'buy': [], 'sell': []})
             portfolio = all_portfolios[strategy_name]
+            # [2026-08-12] 每策略獨立：取得 strategy_idx 與 settings
+            strategy_idx = STRATEGIES.index(strategy_name)
+            strat_settings = load_indicator_settings(strategy_idx)
 
             # 2a. 先賣（賣出回收現金是好事）
             if targets['sell']:
@@ -952,8 +1105,15 @@ def main():
             print(f"\n[{strategy_name}] 買進 ({len(buy_list)} 個標的), 現金 {available_cash:,.0f} 平均分配 {per_target:,.0f}/標的:")
 
             for t in buy_list:
+                # [2026-08-12] v2 需要的參數：strategy_idx / settings / k_value / buy_list_size / current_prices_dict
+                k_val = daily_analysis.get(t['stock'], {}).get('kd_k')
                 result = execute_strategy_action(
-                    strategy_name, portfolio, t['stock'], 'BUY', t['price'], per_target
+                    strategy_name, portfolio, t['stock'], 'BUY', t['price'], per_target,
+                    strategy_idx=strategy_idx,
+                    settings=strat_settings,
+                    k_value=k_val,
+                    buy_list_size=len(buy_list),
+                    current_prices_dict=current_prices
                 )
                 _record_strategy_result(daily_analysis, strategy_name, t['stock'], result, t['trigger'])
                 if result['action'] == 'BUY':

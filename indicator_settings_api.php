@@ -47,6 +47,17 @@ $default = [
         'rate' => 0.1425,
         'discount' => 28.0,    // 2.8 折
         'min' => 20.0
+    ],
+    'position' => [
+        // 資金配置（每策略獨立，存成陣列：[策略1, 策略2]）
+        'buy_unit_pct' => [20, 20],          // 每次買進佔帳戶總值 %
+        'sell_unit_pct' => [50, 50],         // 每次賣出佔持倉 %
+        'max_positions' => [5, 5],           // 最大同時持倉數
+        'min_cash_reserve_pct' => [10, 10],  // 最低現金保留 %
+        'use_kd_strength' => [false, true],  // 是否用 KD 強度加權（方案 B）
+        'kd_strength_max' => [30, 30],       // 達到最大加碼的 K 偏移量
+                                            //   K=20（門檻）→ strength=0
+                                            //   K=-10 → strength=1（滿倉加碼）
     ]
 ];
 

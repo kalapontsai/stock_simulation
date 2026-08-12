@@ -280,6 +280,96 @@
                 </div>
             </div>
 
+            <!-- 資金配置（每策略獨立） -->
+            <div class="indicator-section">
+                <div class="indicator-title">
+                    <span class="icon">&#128181;</span> 資金配置 <span style="font-size: 0.7em; color: #8b949e;">(每策略獨立)</span>
+                </div>
+                <div class="indicator-desc">
+                    決定每次買進/賣出的金額計算公式。<b>方案 B（KD 強度加權）</b>：
+                    K 值越低（越超賣）買越多，公式為 <code>target = per_target × (0.5 + 0.5 × strength)</code>，
+                    strength 由超賣門檻與當前 K 值算出。
+                </div>
+
+                <!-- 策略1 / 策略2 切換 tabs -->
+                <div style="margin-bottom: 12px;">
+                    <button type="button" class="btn btn-secondary" id="pos_tab_s1" onclick="switchPosTab(0)" style="font-size: 0.9em;">策略 1（MA + RSI）</button>
+                    <button type="button" class="btn btn-secondary" id="pos_tab_s2" onclick="switchPosTab(1)" style="font-size: 0.9em;">策略 2（KD）</button>
+                </div>
+
+                <div class="param-grid" id="pos_grid_s1">
+                    <div class="param-group">
+                        <div class="param-label">買進佔總值 %</div>
+                        <input type="number" class="param-input" id="pos_s1_buy_unit_pct" min="1" max="100" step="1">
+                        <div class="param-hint">每次買進用掉總值多少 %</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">賣出佔持倉 %</div>
+                        <input type="number" class="param-input" id="pos_s1_sell_unit_pct" min="1" max="100" step="1">
+                        <div class="param-hint">每次賣出該股的多少 %</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">最大持倉數</div>
+                        <input type="number" class="param-input" id="pos_s1_max_positions" min="1" max="50" step="1">
+                        <div class="param-hint">同時間最多幾支股票</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">現金保留 %</div>
+                        <input type="number" class="param-input" id="pos_s1_min_cash_reserve_pct" min="0" max="100" step="1">
+                        <div class="param-hint">最低保留現金佔總值 %</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">使用 KD 強度加權</div>
+                        <select class="param-input" id="pos_s1_use_kd_strength">
+                            <option value="false">關閉（平均分配）</option>
+                            <option value="true">開啟（方案 B）</option>
+                        </select>
+                        <div class="param-hint">策略1 主要用 MA/RSI，可選擇是否套用</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">KD 強度最大值</div>
+                        <input type="number" class="param-input" id="pos_s1_kd_strength_max" min="1" max="100" step="1">
+                        <div class="param-hint">K 跌多少點達到滿倉加碼</div>
+                    </div>
+                </div>
+
+                <div class="param-grid" id="pos_grid_s2" style="display: none;">
+                    <div class="param-group">
+                        <div class="param-label">買進佔總值 %</div>
+                        <input type="number" class="param-input" id="pos_s2_buy_unit_pct" min="1" max="100" step="1">
+                        <div class="param-hint">每次買進用掉總值多少 %</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">賣出佔持倉 %</div>
+                        <input type="number" class="param-input" id="pos_s2_sell_unit_pct" min="1" max="100" step="1">
+                        <div class="param-hint">每次賣出該股的多少 %</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">最大持倉數</div>
+                        <input type="number" class="param-input" id="pos_s2_max_positions" min="1" max="50" step="1">
+                        <div class="param-hint">同時間最多幾支股票</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">現金保留 %</div>
+                        <input type="number" class="param-input" id="pos_s2_min_cash_reserve_pct" min="0" max="100" step="1">
+                        <div class="param-hint">最低保留現金佔總值 %</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">使用 KD 強度加權</div>
+                        <select class="param-input" id="pos_s2_use_kd_strength">
+                            <option value="false">關閉（平均分配）</option>
+                            <option value="true">開啟（方案 B）</option>
+                        </select>
+                        <div class="param-hint">策略2 預設開啟，KD 越超賣買越多</div>
+                    </div>
+                    <div class="param-group">
+                        <div class="param-label">KD 強度最大值</div>
+                        <input type="number" class="param-input" id="pos_s2_kd_strength_max" min="1" max="100" step="1">
+                        <div class="param-hint">K 跌多少點達到滿倉加碼</div>
+                    </div>
+                </div>
+            </div>
+
             <div class="buttons">
                 <button type="button" class="btn btn-primary" onclick="saveSettings()">儲存設定</button>
                 <button type="button" class="btn btn-secondary" onclick="resetToDefault()">重置為預設</button>
@@ -407,6 +497,30 @@
                 document.getElementById('fee_discount').value = data.fee.discount ?? 28;
                 document.getElementById('fee_min').value = data.fee.min ?? 20;
             }
+            // [2026-08-12] 資金配置（每策略獨立，存成陣列）
+            if (data.position) {
+                const p = data.position;
+                document.getElementById('pos_s1_buy_unit_pct').value = p.buy_unit_pct[0] ?? 20;
+                document.getElementById('pos_s1_sell_unit_pct').value = p.sell_unit_pct[0] ?? 50;
+                document.getElementById('pos_s1_max_positions').value = p.max_positions[0] ?? 5;
+                document.getElementById('pos_s1_min_cash_reserve_pct').value = p.min_cash_reserve_pct[0] ?? 10;
+                document.getElementById('pos_s1_use_kd_strength').value = String(p.use_kd_strength[0] ?? false);
+                document.getElementById('pos_s1_kd_strength_max').value = p.kd_strength_max[0] ?? 30;
+                document.getElementById('pos_s2_buy_unit_pct').value = p.buy_unit_pct[1] ?? 20;
+                document.getElementById('pos_s2_sell_unit_pct').value = p.sell_unit_pct[1] ?? 50;
+                document.getElementById('pos_s2_max_positions').value = p.max_positions[1] ?? 5;
+                document.getElementById('pos_s2_min_cash_reserve_pct').value = p.min_cash_reserve_pct[1] ?? 10;
+                document.getElementById('pos_s2_use_kd_strength').value = String(p.use_kd_strength[1] ?? true);
+                document.getElementById('pos_s2_kd_strength_max').value = p.kd_strength_max[1] ?? 30;
+            }
+            switchPosTab(0);  // 預設顯示策略1
+        }
+
+        function switchPosTab(idx) {
+            document.getElementById('pos_grid_s1').style.display = idx === 0 ? '' : 'none';
+            document.getElementById('pos_grid_s2').style.display = idx === 1 ? '' : 'none';
+            document.getElementById('pos_tab_s1').style.background = idx === 0 ? '#1f6feb' : '#21262d';
+            document.getElementById('pos_tab_s2').style.background = idx === 1 ? '#1f6feb' : '#21262d';
         }
         
         function loadPreset(name) {
@@ -453,6 +567,33 @@
                     rate: parseFloat(document.getElementById('fee_rate').value) || 0.1425,
                     discount: parseFloat(document.getElementById('fee_discount').value) || 28,
                     min: parseFloat(document.getElementById('fee_min').value) || 20
+                },
+                // [2026-08-12] 資金配置：每策略獨立（陣列 [策略1, 策略2]）
+                position: {
+                    buy_unit_pct: [
+                        parseInt(document.getElementById('pos_s1_buy_unit_pct').value) || 20,
+                        parseInt(document.getElementById('pos_s2_buy_unit_pct').value) || 20
+                    ],
+                    sell_unit_pct: [
+                        parseInt(document.getElementById('pos_s1_sell_unit_pct').value) || 50,
+                        parseInt(document.getElementById('pos_s2_sell_unit_pct').value) || 50
+                    ],
+                    max_positions: [
+                        parseInt(document.getElementById('pos_s1_max_positions').value) || 5,
+                        parseInt(document.getElementById('pos_s2_max_positions').value) || 5
+                    ],
+                    min_cash_reserve_pct: [
+                        parseInt(document.getElementById('pos_s1_min_cash_reserve_pct').value) || 10,
+                        parseInt(document.getElementById('pos_s2_min_cash_reserve_pct').value) || 10
+                    ],
+                    use_kd_strength: [
+                        document.getElementById('pos_s1_use_kd_strength').value === 'true',
+                        document.getElementById('pos_s2_use_kd_strength').value === 'true'
+                    ],
+                    kd_strength_max: [
+                        parseInt(document.getElementById('pos_s1_kd_strength_max').value) || 30,
+                        parseInt(document.getElementById('pos_s2_kd_strength_max').value) || 30
+                    ]
                 }
             };
         }
