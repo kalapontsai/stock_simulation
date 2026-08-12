@@ -43,6 +43,8 @@
         .btn-primary:hover { background: #2ea043; }
         .btn-secondary { background: #30363d; color: #c9d1d9; }
         .btn-secondary:hover { background: #3d444d; }
+        .btn-secondary.active { background: #1f6feb; color: white; }
+        .btn-secondary.active:hover { background: #1f6feb; }
         .btn-warning { background: #d29922; color: #0d1117; }
         .btn-warning:hover { background: #e3b341; }
         
@@ -517,10 +519,15 @@
         }
 
         function switchPosTab(idx) {
-            document.getElementById('pos_grid_s1').style.display = idx === 0 ? '' : 'none';
-            document.getElementById('pos_grid_s2').style.display = idx === 1 ? '' : 'none';
-            document.getElementById('pos_tab_s1').style.background = idx === 0 ? '#1f6feb' : '#21262d';
-            document.getElementById('pos_tab_s2').style.background = idx === 1 ? '#1f6feb' : '#21262d';
+            // [FIX 2026-08-12] 改用 classList 避免 inline style 跟 :hover CSS 規則衝突
+            const gridS1 = document.getElementById('pos_grid_s1');
+            const gridS2 = document.getElementById('pos_grid_s2');
+            const tabS1 = document.getElementById('pos_tab_s1');
+            const tabS2 = document.getElementById('pos_tab_s2');
+            gridS1.style.display = idx === 0 ? '' : 'none';
+            gridS2.style.display = idx === 1 ? '' : 'none';
+            tabS1.classList.toggle('active', idx === 0);
+            tabS2.classList.toggle('active', idx === 1);
         }
         
         function loadPreset(name) {

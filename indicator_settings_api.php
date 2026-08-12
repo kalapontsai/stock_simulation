@@ -2,6 +2,57 @@
 // 技術指標參數 API
 header('Content-Type: application/json');
 
+/**
+ * 深層合併：list 整個取代、dict 遞迴合併、純量 input 覆蓋 default。
+ * 這是為了取代 array_merge_recursive：後者對 list 會 concat 而非取代。
+ */
+function deep_merge($default, $input) {
+    // 兩者都是 array：看是 list 還是 dict
+    if (is_array($default) && is_array($input)) {
+        $default_is_list = is_php_list($default);
+        $input_is_list = is_php_list($input);
+        // list vs list：input 整個取代
+        if ($default_is_list && $input_is_list) {
+            return $input;
+        }
+        // dict vs dict：遞迴合併
+        if (!$default_is_list && !$input_is_list) {
+            $result = $default;
+            foreach ($input as $key => $value) {
+                if (array_key_exists($key, $result) && is_array($result[$key]) && is_array($value)) {
+                    $result[$key] = deep_merge($result[$key], $value);
+                } else {
+                    $result[$key] = $value;
+                }
+            }
+            return $result;
+        }
+        // 型別不一致：input 覆蓋
+        return $input;
+    }
+    // input 是 null（key 不存在）：用 default
+    if ($input === null) {
+        return $default;
+    }
+    // 純量：input 覆蓋 default
+    return $input;
+}
+
+/**
+ * PHP 8.1+ array_is_list 的相容版本
+ */
+function is_php_list($arr) {
+    if (function_exists('array_is_list')) {
+        return array_is_list($arr);
+    }
+    // fallback：手動檢查 keys 是不是 0..N-1
+    $i = 0;
+    foreach ($arr as $k => $_) {
+        if ($k !== $i++) return false;
+    }
+    return true;
+}
+
 $file = __DIR__ . '/data/indicator_settings.json';
 $default = [
     'ma' => [
@@ -71,14 +122,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true);
     if ($input) {
-        // 合併預設值
-        $merged = array_merge_recursive($default, $input);
-        // 確保所有欄位存在
-        foreach ($default as $key => $value) {
-            if (!isset($merged[$key])) {
-                $merged[$key] = $value;
-            }
-        }
+        // [FIX 2026-08-12] 原本用 array_merge_recursive 會把 list 給 concat 起來
+        // 例如 $default['position']['buy_unit_pct'] = [20, 20] + $input['...'] = [80, 80]
+        // → 合併結果是 [20, 20, 80, 80]，下次讀取 [0]、[1] 都是預設值，使用者以為「設定沒保存」。
+        // 改用自訂 deep_merge：list 整個取代、dict 遞迴合併、純量 input 覆蓋 default。
+        $merged = deep_merge($default, $input);
         file_put_contents($file, json_encode($merged, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         echo json_encode(['success' => true, 'settings' => $merged], JSON_UNESCAPED_UNICODE);
     } else {
