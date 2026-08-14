@@ -271,6 +271,10 @@ if ($dataMtime > 0) {
                             <div class="kpi-label">Buy &amp; Hold</div>
                             <div class="kpi-value" id="kpi-buyhold">—</div>
                         </div>
+                        <div class="kpi">
+                            <div class="kpi-label">0050 含息</div>
+                            <div class="kpi-value" id="kpi-benchmark-0050">—</div>
+                        </div>
                     </div>
 
                     <div class="chart-wrap">
@@ -402,26 +406,55 @@ if ($dataMtime > 0) {
             document.getElementById('kpi-trades').className = 'kpi-value';
             document.getElementById('kpi-buyhold').textContent = fmtPct(k.buyhold_return_pct);
             document.getElementById('kpi-buyhold').className = 'kpi-value ' + colorClass(k.buyhold_return_pct);
+            // 0050 含息
+            const benchmarkEl = document.getElementById('kpi-benchmark-0050');
+            if (k.benchmark_0050_return_pct === null || k.benchmark_0050_return_pct === undefined) {
+                benchmarkEl.textContent = '無資料';
+                benchmarkEl.className = 'kpi-value';
+            } else {
+                benchmarkEl.textContent = fmtPct(k.benchmark_0050_return_pct);
+                benchmarkEl.className = 'kpi-value ' + colorClass(k.benchmark_0050_return_pct);
+            }
 
-            renderChart(r.equity_curve, r.buyhold_curve);
+            renderChart(r.equity_curve, r.buyhold_curve, r.benchmark_0050_curve || []);
             renderTrades(r.trades || []);
         }
 
-        function renderChart(equity, buyhold) {
+        function renderChart(equity, buyhold, benchmark0050) {
             const ctx = document.getElementById('equityChart').getContext('2d');
             const labels = equity.map(p => p.date);
             const equityData = equity.map(p => p.value);
             const buyholdData = buyhold.map(p => p.value);
+
+            // 0050 含息：對齊到 strategy 標籤（長度可能不同）
+            const benchmarkData = labels.map(d => {
+                const p = benchmark0050.find(x => x.date === d);
+                return p ? p.value : null;
+            });
+
+            const datasets = [
+                { label: '策略淨值', data: equityData, borderColor: '#58a6ff', backgroundColor: '#58a6ff20', borderWidth: 2, pointRadius: 0, tension: 0.1 },
+                { label: 'Buy & Hold', data: buyholdData, borderColor: '#8b949e', backgroundColor: '#8b949e20', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, tension: 0.1 },
+            ];
+            if (benchmark0050 && benchmark0050.length > 0) {
+                datasets.push({
+                    label: '0050 含息',
+                    data: benchmarkData,
+                    borderColor: '#f0883e',
+                    backgroundColor: '#f0883e20',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.1,
+                    spanGaps: true,
+                });
+            }
 
             if (equityChart) equityChart.destroy();
             equityChart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: labels,
-                    datasets: [
-                        { label: '策略淨值', data: equityData, borderColor: '#58a6ff', backgroundColor: '#58a6ff20', borderWidth: 2, pointRadius: 0, tension: 0.1 },
-                        { label: 'Buy & Hold', data: buyholdData, borderColor: '#8b949e', backgroundColor: '#8b949e20', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, tension: 0.1 },
-                    ],
+                    datasets: datasets,
                 },
                 options: {
                     responsive: true,

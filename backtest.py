@@ -43,6 +43,9 @@ from stock_trader import (
 # 結果檔（append-only）
 RESULTS_FILE = DATA_DIR / 'backtest_results.json'
 
+# 0050 含息快取（離線使用）
+BENCHMARK_0050_FILE = DATA_DIR / '0050_total_return.json'
+
 # 最小交易限制（與 stock_trader.py 一致）
 MIN_TRADE_SHARES = 100
 MIN_TRADE_AMOUNT = 10_000
@@ -65,6 +68,42 @@ def load_stock_data() -> dict:
         return {}
     with open(DATA_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+def load_benchmark_0050() -> list:
+    """Load 0050 含息 series (含 reinvested dividends).
+
+    Returns: [{'date': 'YYYY-MM-DD', 'value': float}, ...] 未正規化。
+    若檔案不存在回傳空 list。
+    """
+    if not BENCHMARK_0050_FILE.exists():
+        return []
+    try:
+        with open(BENCHMARK_0050_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+    series = data.get('series', [])
+    return [{'date': p['date'], 'value': p['total_return_price']} for p in series]
+
+
+def build_benchmark_0050_curve(
+    start: str, end: str, initial_capital: float,
+) -> list:
+    """從 0050 含息 cache 切片到 [start, end]，正規化到 initial_capital。"""
+    series = load_benchmark_0050()
+    if not series:
+        return []
+    sliced = [p for p in series if start <= p['date'] <= end]
+    if not sliced:
+        return []
+    base = sliced[0]['value']
+    if base <= 0:
+        return []
+    return [
+        {'date': p['date'], 'value': round(initial_capital * p['value'] / base, 2)}
+        for p in sliced
+    ]
 
 
 def build_aligned_dates(stock_data: dict, start: str, end: str) -> list:
@@ -387,6 +426,11 @@ def run_backtest(
     day0_prices = current_prices_from(stock_data, dates[0])
     buyhold = _init_buyhold(initial_capital, day0_prices)
 
+    # 0050 含息基準（若有 cache）
+    benchmark_0050_curve = build_benchmark_0050_curve(
+        start_date, end_date, initial_capital,
+    )
+
     equity_curve = []
     buyhold_curve = []
 
@@ -429,10 +473,22 @@ def run_backtest(
     else:
         kpi['buyhold_return_pct'] = 0.0
 
+    # 0050 含息 報酬
+    if benchmark_0050_curve:
+        bm_initial = benchmark_0050_curve[0]['value']
+        bm_final = benchmark_0050_curve[-1]['value']
+        if bm_initial > 0:
+            kpi['benchmark_0050_return_pct'] = round((bm_final - bm_initial) / bm_initial * 100, 2)
+        else:
+            kpi['benchmark_0050_return_pct'] = 0.0
+    else:
+        kpi['benchmark_0050_return_pct'] = None
+
     return {
         'kpi': kpi,
         'equity_curve': equity_curve,
         'buyhold_curve': buyhold_curve,
+        'benchmark_0050_curve': benchmark_0050_curve,
         'trades': portfolio['trades'],
         'run_meta': {
             'start_date': start_date,
@@ -458,6 +514,7 @@ def _empty_kpi(initial_capital: float) -> dict:
         'win_rate_pct': 0.0,
         'n_trades': 0,
         'buyhold_return_pct': 0.0,
+        'benchmark_0050_return_pct': None,
         'final_value': round(initial_capital, 2),
     }
 

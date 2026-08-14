@@ -25,6 +25,10 @@ daily_analysis.json
 indicator_settings.json
 snapshot.json
 
+# Exception: benchmark data is regenerable but small enough to ship
+# (so users don't need to compute 0050 含息 manually on first run)
+!data/0050_total_return.json
+
 # OS
 .DS_Store
 Thumbs.db

@@ -24,6 +24,8 @@ from backtest import (
     portfolio_value,
     _compute_closed_trades,
     _load_default_settings,
+    load_benchmark_0050,
+    build_benchmark_0050_curve,
 )
 
 
@@ -336,3 +338,66 @@ def test_run_backtest_symbol_not_found_returns_error():
     assert result['equity_curve'] == []
     assert result['buyhold_curve'] == []
     assert result['trades'] == []
+
+
+# === 0050 含息基準（benchmark_0050_curve）===
+
+def test_load_benchmark_0050_returns_normalized_shape():
+    """load_benchmark_0050 回 [{date, value}] 格式。"""
+    series = load_benchmark_0050()
+    if not series:
+        # 若 0050 含息 cache 檔缺席，跳過（代表該環境沒有這個檔）
+        pytest.skip("0050_total_return.json 不存在，跳過此測試")
+    assert isinstance(series, list)
+    assert all('date' in p and 'value' in p for p in series)
+    assert all(isinstance(p['value'], (int, float)) for p in series)
+
+
+def test_build_benchmark_0050_curve_normalizes_to_initial_capital():
+    """build_benchmark_0050_curve 應以首日為準正規化到 initial_capital。"""
+    series = load_benchmark_0050()
+    if not series:
+        pytest.skip("0050_total_return.json 不存在，跳過此測試")
+    start = series[0]['date']
+    end = series[-1]['date']
+    initial = 1_000_000
+    curve = build_benchmark_0050_curve(start, end, initial)
+    assert len(curve) > 0
+    # 首點 = initial_capital（正規化）
+    assert curve[0]['value'] == pytest.approx(initial, abs=0.01)
+    # curve 與停含息 cache 同比變動
+    cache_ratio = series[-1]['value'] / series[0]['value']
+    curve_ratio = curve[-1]['value'] / curve[0]['value']
+    assert curve_ratio == pytest.approx(cache_ratio, abs=0.001)
+
+
+def test_build_benchmark_0050_curve_handles_missing_file():
+    """若含息 cache 檔不存在，應回空 list（不崩潰）。"""
+    # delete 改讀環境：直接傳一個不存在的區間
+    curve = build_benchmark_0050_curve('1900-01-01', '1900-01-02', 1_000_000)
+    # 要不是全個空就是該區間切片是空
+    assert curve == []
+
+
+def test_run_backtest_includes_benchmark_0050():
+    """run_backtest 應在 result 加 benchmark_0050_curve 與 KPI。"""
+    stock_data = {
+        'A': make_fake_stock('A', n_days=60, drift=0.005),
+    }
+    result = run_backtest(
+        start_date='2025-01-01',
+        end_date='2025-03-01',
+        strategy_idx=0,
+        rebalance_n=5,
+        settings=fake_settings_s1(),
+        initial_capital=1_000_000,
+        stock_data=stock_data,
+    )
+    # 有 cache 就填，沒 cache 就 None（不該崩潰）
+    assert 'benchmark_0050_curve' in result
+    kpi = result['kpi']
+    assert 'benchmark_0050_return_pct' in kpi
+    if result['benchmark_0050_curve']:
+        # 全部都順路填 KPI
+        assert kpi['benchmark_0050_return_pct'] is not None
+        assert isinstance(kpi['benchmark_0050_return_pct'], (int, float))
