@@ -146,7 +146,7 @@
             };
 
             let html = '';
-            const initialCapital = 1000000;
+            const initialCapital = 5000000;
 
             for (const [name, data] of Object.entries(portfolio)) {
                 const strategy = strategies[name] || { label: name };
