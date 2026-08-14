@@ -1,21 +1,31 @@
 <?php
 /**
- * 手動投資操作頁
+ * 手動投資操作頁 + Agent API
  *
  * 功能：
  *   - 顯示「手動操作」帳戶的現金、庫存、即時股價、損益
  *   - 選股票、買/賣、輸入股數 → 下單（同步扣稅費）
  *   - 一鍵歸零按鈕（清空庫存、現金回到 500 萬、清空交易紀錄）
+ *   - Agent API（POST + JSON body 或 GET）：給 agent_stock.py 呼叫用
  *
- * URL：
- *   /stock/manual_trade.php              → 顯示頁面
- *   ?action=api_get                      → JSON: 帳戶 + 股票即時價 + 庫存市值
- *   ?action=api_buy&stock=2330.TW&qty=1000   → JSON: 下單結果
- *   ?action=api_sell&stock=2330.TW&qty=500   → JSON: 下單結果
- *   ?action=api_reset                    → JSON: 歸零結果
+ * API 路由（GET 與 POST 都接受；POST 支援 JSON body）：
+ *   ?action=api_get                              → JSON: 帳戶 + 股票即時價 + 庫存市值
+ *   ?action=api_buy&stock=2330.TW&qty=1000       → JSON: 下單結果
+ *   ?action=api_buy&stock=2330.TW&amount=50000   → JSON: 下單結果（按金額自動算股數）
+ *   ?action=api_sell&stock=2330.TW&qty=500       → JSON: 下單結果
+ *   ?action=api_sell&stock=2330.TW&amount=30000  → JSON: 下單結果（按金額自動算股數）
+ *   ?action=api_stock_info&stock=2330.TW         → JSON: 單股現在價、成本、損益、可買股數
+ *   ?action=api_list_stocks                      → JSON: 可下單股票清單 + 現價
+ *   ?action=api_reset                            → JSON: 歸零「手動操作」帳戶
+ *   ?action=api_reset_auto                       → JSON: 歸零「策略1」「策略2」
+ *
+ * Agent 下單範例（POST + JSON）：
+ *   curl -X POST http://10.35.32.11/stock/manual_trade.php \
+ *        -H "Content-Type: application/json" \
+ *        -d '{"action":"api_buy","stock":"2330.TW","amount":50000}'
  *
  * 帳戶 KEY = '手動操作'（與 stock_trader.py STRATEGIES 一致）
- * 初始資金 = 5,000,000（與 trader INITIAL_CAPITAL 一致）
+ * 初始資金 = 5,000,000
  */
 
 declare(strict_types=1);
@@ -27,6 +37,10 @@ ini_set('display_errors', '0');
 // ============================================================
 $MANUAL_KEY = '手動操作';
 $INITIAL_CAPITAL = 5_000_000;
+
+// 手動操作的最小交易限制（沿用 stock_trader.py 的常數）
+$MIN_TRADE_AMOUNT = 10_000;
+$MIN_TRADE_SHARES = 100;
 
 $config = [
     'stock_list_file'  => __DIR__ . '/data/stock_list.json',
@@ -135,10 +149,87 @@ function mt_jsonResponse(array $data, int $code = 200): void {
     exit;
 }
 
+/**
+ * 解析 POST 進來的 JSON body。
+ * 回傳 ['ok' => bool, 'data' => array]
+ *   - 非 POST：回 ['ok' => true, 'data' => null]
+ *   - POST 但 body 為空：回 ['ok' => true, 'data' => []]
+ *   - POST 但 JSON 解析失敗：回 ['ok' => false, 'data' => null]
+ */
+function mt_readJsonInput(): array {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        return ['ok' => true, 'data' => null];
+    }
+    $raw = file_get_contents('php://input');
+    if ($raw === false || $raw === '') {
+        return ['ok' => true, 'data' => []];
+    }
+    $data = json_decode($raw, true);
+    if ($data === null && json_last_error() !== JSON_ERROR_NONE) {
+        return ['ok' => false, 'data' => null];
+    }
+    if (!is_array($data)) {
+        return ['ok' => false, 'data' => null];
+    }
+    return ['ok' => true, 'data' => $data];
+}
+
+/**
+ * 統一讀取輸入參數：JSON body > $_GET > $_POST
+ *
+ * 用法：$stock = mt_input($json, 'stock', '');
+ */
+function mt_input(?array $json, string $key, $default = null) {
+    if ($json !== null && array_key_exists($key, $json)) return $json[$key];
+    if (isset($_GET[$key])) return $_GET[$key];
+    if (isset($_POST[$key])) return $_POST[$key];
+    return $default;
+}
+
+/**
+ * 計算該股的平均成本（用 BUY 交易加權平均）
+ */
+function mt_calcCostBasis(array $trades, string $stock): array {
+    $totalCost = 0.0;
+    $totalQty = 0;
+    foreach ($trades as $t) {
+        if (($t['stock'] ?? null) !== $stock || ($t['action'] ?? null) !== 'BUY') continue;
+        $totalCost += (float)($t['total_cost'] ?? 0);
+        $totalQty += (int)($t['quantity'] ?? 0);
+    }
+    $basis = $totalQty > 0 ? $totalCost / $totalQty : null;
+    return ['cost_basis' => $basis, 'total_cost' => $totalCost, 'total_qty' => $totalQty];
+}
+
+/**
+ * 計算「以現在價格可買的最大股數」（含稅費）
+ *
+ * 用 max cash 算：cost_per_share(含稅費) = price * (1 + tax_rate + fee_rate)
+ *                  qty = floor(cash / cost_per_share)
+ */
+function mt_calcCanBuy(float $cash, float $price, array $tax_cfg, array $fee_cfg, int $minShares): int {
+    if ($price <= 0 || $cash <= 0) return 0;
+    $taxRate = (float)($tax_cfg['buy'] ?? 0) / 100;
+    $feeRate = (float)($fee_cfg['rate'] ?? 0) * (float)($fee_cfg['discount'] ?? 100) / 100 / 100;
+    $minFee = (float)($fee_cfg['min'] ?? 0);
+    // 保守估：fee = max(min, total * feeRate) → 用 feeRate 估（大額時 min fee 不影響）
+    $costPerShare = $price * (1 + $taxRate + $feeRate);
+    return max(0, (int)floor($cash / $costPerShare));
+}
+
+// ============================================================
+// 解析 POST JSON body（一次）
+// ============================================================
+$jsonRead = mt_readJsonInput();
+if (!$jsonRead['ok']) {
+    mt_jsonResponse(['ok' => false, 'error' => 'JSON body 解析失敗（需為合法 JSON object）'], 400);
+}
+$jsonInput = $jsonRead['data'];
+
 // ============================================================
 // API 路由
 // ============================================================
-$action = $_GET['action'] ?? '';
+$action = mt_input($jsonInput, 'action', '');
 
 if ($action === 'api_get') {
     $stocks = mt_loadStockList($config);
@@ -156,13 +247,8 @@ if ($action === 'api_get') {
         foreach ($acct['holdings'] as $stock => $qty) {
             if ($qty <= 0) continue;
             $price = $prices[$stock] ?? null;
-            $totalCost = 0.0; $totalQty = 0;
-            foreach ($acct['trades'] as $t) {
-                if ($t['stock'] !== $stock || $t['action'] !== 'BUY') continue;
-                $totalCost += (float)($t['total_cost'] ?? 0);
-                $totalQty += (int)($t['quantity'] ?? 0);
-            }
-            $costBasis = $totalQty > 0 ? $totalCost / $totalQty : null;
+            $cost = mt_calcCostBasis($acct['trades'] ?? [], $stock);
+            $costBasis = $cost['cost_basis'];
             $marketValue = $price !== null ? $qty * $price : null;
             $unrealized = ($price !== null && $costBasis !== null)
                 ? round(($price - $costBasis) * $qty, 2)
@@ -197,12 +283,26 @@ if ($action === 'api_get') {
     ]);
 }
 
-if ($action === 'api_buy' || $action === 'api_sell') {
-    $stock = trim((string)($_GET['stock'] ?? $_POST['stock'] ?? ''));
-    $qty = (int)($_GET['qty'] ?? $_POST['qty'] ?? 0);
+if ($action === 'api_list_stocks') {
+    $stocks = mt_loadStockList($config);
+    $prices = mt_getLatestPrices($stocks, $config['data_file']);
+    $list = [];
+    foreach ($stocks as $s) {
+        $list[] = [
+            'code' => $s,
+            'price' => $prices[$s] ?? null,
+        ];
+    }
+    mt_jsonResponse([
+        'ok' => true,
+        'stocks' => $list,
+    ]);
+}
 
-    if ($stock === '' || $qty <= 0) {
-        mt_jsonResponse(['ok' => false, 'error' => '股票代號與股數必填'], 400);
+if ($action === 'api_stock_info') {
+    $stock = trim((string)mt_input($jsonInput, 'stock', ''));
+    if ($stock === '') {
+        mt_jsonResponse(['ok' => false, 'error' => '股票代號必填'], 400);
     }
 
     $stocks = mt_loadStockList($config);
@@ -216,20 +316,80 @@ if ($action === 'api_buy' || $action === 'api_sell') {
     }
     $price = $prices[$stock];
 
-    // 手動操作的最小交易限制（沿用 stock_trader.py 的常數）
-    $MIN_TRADE_AMOUNT = 10_000;
-    $MIN_TRADE_SHARES = 100;
+    $portfolio = mt_loadPortfolio($config['portfolio_file']);
+    mt_ensureAccount($portfolio, $MANUAL_KEY, $INITIAL_CAPITAL);
+    $acct = $portfolio[$MANUAL_KEY];
+
+    $holding = (int)($acct['holdings'][$stock] ?? 0);
+    $cost = mt_calcCostBasis($acct['trades'] ?? [], $stock);
+    $costBasis = $cost['cost_basis'];
+
+    $marketValue = $holding > 0 ? $holding * $price : null;
+    $unrealized = ($holding > 0 && $costBasis !== null)
+        ? round(($price - $costBasis) * $holding, 2)
+        : null;
+    $unrealizedRate = ($holding > 0 && $costBasis !== null && $costBasis > 0)
+        ? round((($price - $costBasis) / $costBasis) * 100, 2)
+        : null;
+
+    $taxFee = mt_loadTaxFee($config, $defaultTaxFee);
+    $canBuy = mt_calcCanBuy((float)$acct['cash'], $price, $taxFee['tax'], $taxFee['fee'], $MIN_TRADE_SHARES);
+    $canBuyAmount = $canBuy * $price;
+
+    mt_jsonResponse([
+        'ok' => true,
+        'stock' => $stock,
+        'price' => $price,
+        'holding' => $holding,
+        'cost_basis' => $costBasis,
+        'total_cost' => $costBasis !== null ? round($cost['total_cost'], 2) : null,
+        'market_value' => $marketValue,
+        'unrealized_pl' => $unrealized,
+        'unrealized_rate' => $unrealizedRate,
+        'cash' => (float)$acct['cash'],
+        'can_buy_qty' => $canBuy,
+        'can_buy_amount' => round($canBuyAmount, 2),
+    ]);
+}
+
+if ($action === 'api_buy' || $action === 'api_sell') {
+    $stock = trim((string)mt_input($jsonInput, 'stock', ''));
+    $qty = (int)mt_input($jsonInput, 'qty', 0);
+    $amount = (float)mt_input($jsonInput, 'amount', 0);
+
+    if ($stock === '') {
+        mt_jsonResponse(['ok' => false, 'error' => '股票代號必填'], 400);
+    }
+    if ($qty <= 0 && $amount <= 0) {
+        mt_jsonResponse(['ok' => false, 'error' => 'qty 與 amount 至少需填一個（且 > 0）'], 400);
+    }
+
+    $stocks = mt_loadStockList($config);
+    if (!in_array($stock, $stocks, true)) {
+        mt_jsonResponse(['ok' => false, 'error' => "股票 {$stock} 不在清單中"], 400);
+    }
+
+    $prices = mt_getLatestPrices($stocks, $config['data_file']);
+    if (!isset($prices[$stock])) {
+        mt_jsonResponse(['ok' => false, 'error' => "查無 {$stock} 最新報價"], 400);
+    }
+    $price = $prices[$stock];
 
     $portfolio = mt_loadPortfolio($config['portfolio_file']);
     mt_ensureAccount($portfolio, $MANUAL_KEY, $INITIAL_CAPITAL);
     $acct = &$portfolio[$MANUAL_KEY];
 
     if ($action === 'api_buy') {
-        // 對手動下單：直接用使用者輸入的股數（不做半倉），但套最小交易限制
-        $targetAmount = max($qty * $price, $MIN_TRADE_AMOUNT, $MIN_TRADE_SHARES * $price);
-        $actualQty = (int)floor($targetAmount / $price);
+        // 算實際下單股數（amount 優先）
+        if ($amount > 0) {
+            $targetAmount = max($amount, $MIN_TRADE_AMOUNT, $MIN_TRADE_SHARES * $price);
+            $actualQty = (int)floor($targetAmount / $price);
+        } else {
+            $targetAmount = max($qty * $price, $MIN_TRADE_AMOUNT, $MIN_TRADE_SHARES * $price);
+            $actualQty = (int)floor($targetAmount / $price);
+        }
         if ($actualQty <= 0) {
-            mt_jsonResponse(['ok' => false, 'error' => '股數無效'], 400);
+            mt_jsonResponse(['ok' => false, 'error' => '股數無效（金額太小）'], 400);
         }
         $total = $price * $actualQty;
         $taxFee = mt_loadTaxFee($config, $defaultTaxFee);
@@ -260,23 +420,42 @@ if ($action === 'api_buy' || $action === 'api_sell') {
             'total_cost' => round($totalCost, 2),
             'source'     => 'manual',
         ];
+        $resultQty = $actualQty;
     } else { // api_sell
-        $current = $acct['holdings'][$stock] ?? 0;
-        if ($current < $qty) {
+        $current = (int)($acct['holdings'][$stock] ?? 0);
+        if ($current <= 0) {
             mt_jsonResponse([
                 'ok' => false,
-                'error' => "庫存不足（持有 {$current} 股，欲賣 {$qty} 股）",
+                'error' => "未持有 {$stock}（持倉 0 股）",
                 'holding' => $current,
             ], 400);
         }
 
-        $total = $price * $qty;
+        if ($amount > 0) {
+            // 賣出金額 → 算股數（不能超過持倉）
+            $sellQty = (int)floor($amount / $price);
+            $actualQty = min($sellQty, $current);
+            if ($actualQty <= 0) {
+                mt_jsonResponse(['ok' => false, 'error' => '賣出金額太小，湊不到 1 股'], 400);
+            }
+        } else {
+            $actualQty = $qty;
+            if ($current < $actualQty) {
+                mt_jsonResponse([
+                    'ok' => false,
+                    'error' => "庫存不足（持有 {$current} 股，欲賣 {$actualQty} 股）",
+                    'holding' => $current,
+                ], 400);
+            }
+        }
+
+        $total = $price * $actualQty;
         $taxFee = mt_loadTaxFee($config, $defaultTaxFee);
         $cost = mt_calcTradeCost('SELL', $total, $taxFee['tax'], $taxFee['fee']);
         $netIncome = $total - $cost['tax'] - $cost['fee'];
 
         $acct['cash'] += $netIncome;
-        $acct['holdings'][$stock] -= $qty;
+        $acct['holdings'][$stock] -= $actualQty;
         if ($acct['holdings'][$stock] <= 0) {
             unset($acct['holdings'][$stock]);
         }
@@ -285,13 +464,14 @@ if ($action === 'api_buy' || $action === 'api_sell') {
             'stock'      => $stock,
             'action'     => 'SELL',
             'price'      => $price,
-            'quantity'   => $qty,
+            'quantity'   => $actualQty,
             'total'      => round($total, 2),
             'tax'        => $cost['tax'],
             'fee'        => $cost['fee'],
             'net_income' => round($netIncome, 2),
             'source'     => 'manual',
         ];
+        $resultQty = $actualQty;
     }
 
     if (!mt_savePortfolio($config['portfolio_file'], $portfolio)) {
@@ -305,9 +485,9 @@ if ($action === 'api_buy' || $action === 'api_sell') {
         'action' => strtoupper(substr($action, 4)),
         'stock' => $stock,
         'price' => $price,
-        'quantity' => $qty,
+        'quantity' => $resultQty,
         'cash' => round($acct['cash'], 2),
-        'message' => "{$stock} " . ($action === 'api_buy' ? '買進' : '賣出') . " {$qty} 股 @ {$price}",
+        'message' => "{$stock} " . ($action === 'api_buy' ? '買進' : '賣出') . " {$resultQty} 股 @ {$price}",
     ]);
 }
 
