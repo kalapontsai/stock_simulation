@@ -119,7 +119,8 @@
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const symbol = urlParams.get('symbol') || '0050.TW';
-        document.getElementById('symbolTitle').textContent = symbol;
+        const displayTicker = (value) => String(value || '').replace(/\.(TW|TWO)$/, '');
+        document.getElementById('symbolTitle').textContent = displayTicker(symbol);
         
         let allData = null;
         let currentRange = 30;

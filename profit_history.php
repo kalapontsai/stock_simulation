@@ -117,6 +117,10 @@
             return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
 
+        function displayTicker(symbol) {
+            return String(symbol || '').replace(/\.(TW|TWO)$/, '');
+        }
+
         async function loadProfitHistory() {
             try {
                 const [historyRes, stockRes] = await Promise.all([
@@ -131,7 +135,7 @@
                 const portfolios = await fetch('/stock/portfolio.json').then(r => r.json());
                 
                 let statsHtml = '';
-                const initialCapital = 1000000;
+                const initialCapital = 5000000;
                 
                 for (const [name, portfolio] of Object.entries(portfolios)) {
                     let currentValue = portfolio.cash;
@@ -356,7 +360,7 @@
                     <td>${timePart}</td>
                     <td>${escapeHtml(t.strategy)}</td>
                     <td class="${actionCls}">${t.action}</td>
-                    <td><b>${escapeHtml(t.stock || t.symbol || '')}</b></td>
+                    <td><b>${escapeHtml(displayTicker(t.stock || t.symbol || ''))}</b></td>
                     <td style="text-align:right;">${t.quantity}</td>
                     <td style="text-align:right;">${Number(t.price).toFixed(2)}</td>
                     <td style="text-align:right;">${formatNumber(Math.round(total))}</td>
@@ -405,7 +409,7 @@
                         `<span style="color:#3fb950;">${s2.action} ${s2.quantity || ''}</span> ${s2.reason}`;
                     
                     html += `<tr style="border-bottom:1px solid #30363d;">
-                        <td style="padding:10px;"><b>${symbol}</b></td>
+                        <td style="padding:10px;"><b>${displayTicker(symbol)}</b></td>
                         <td style="text-align:center;">${info.price?.toFixed(2) || '-'}</td>
                         <td style="text-align:center;">${info.ma5 || '-'}</td>
                         <td style="text-align:center;">${info.ma20 || '-'}</td>

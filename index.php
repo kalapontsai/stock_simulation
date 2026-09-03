@@ -122,6 +122,10 @@
             return div.innerHTML;
         }
 
+        function displayTicker(symbol) {
+            return String(symbol || '').replace(/\.(TW|TWO)$/, '');
+        }
+
         function formatNumber(num) {
             return new Intl.NumberFormat('zh-TW').format(Math.round(num));
         }
@@ -129,10 +133,11 @@
         function loadData() {
             Promise.all([
                 fetch('/stock/data/stock_data.json').then(r => r.json()),
-                fetch('/stock/data/portfolio.json').then(r => r.json())
-            ]).then(([stockData, portfolio]) => {
+                fetch('/stock/data/portfolio.json').then(r => r.json()),
+                fetch('/stock/stocks_api.php').then(r => r.json())
+            ]).then(([stockData, portfolio, stockList]) => {
                 renderPortfolio(portfolio, stockData);
-                renderStocks(stockData);
+                renderStocks(stockData, stockList.stocks || Object.keys(stockData));
                 document.getElementById('updateTime').textContent = new Date().toLocaleString('zh-TW');
             }).catch(err => {
                 console.error('載入資料失敗:', err);
@@ -207,7 +212,7 @@
                             <h3>庫存</h3>
                             ${Object.entries(data.holdings || {}).filter(([_, qty]) => qty > 0).map(([stock, qty]) => `
                                 <div class="holding-item">
-                                    <span class="stock-symbol">${escapeHtml(stock)}</span>
+                                    <span class="stock-symbol">${escapeHtml(displayTicker(stock))}</span>
                                     <span class="stock-qty">${qty} 股</span>
                                 </div>
                             `).join('') || '<div style="color: #8b949e;">無庫存</div>'}
@@ -226,7 +231,7 @@
                                 <div class="trade-item ${t.action === 'BUY' ? 'trade-buy' : 'trade-sell'}">
                                     <div style="display: flex; justify-content: space-between;">
                                         <span class="trade-action ${t.action.toLowerCase()}">${t.action}</span>
-                                        <span>${escapeHtml(t.stock)}</span>
+                                        <span>${escapeHtml(displayTicker(t.stock))}</span>
                                         <span>${t.quantity} 股 @ ${Number(t.price).toFixed(2)}</span>
                                         <span>${t.date.split(' ')[0]}</span>
                                     </div>
@@ -249,10 +254,11 @@
             document.getElementById('bots').innerHTML = html;
         }
 
-        function renderStocks(stockData) {
+        function renderStocks(stockData, stockList) {
             let html = '';
 
-            for (const [symbol, prices] of Object.entries(stockData)) {
+            for (const symbol of stockList) {
+                const prices = Array.isArray(stockData[symbol]) ? stockData[symbol] : [];
                 // 找到最後一個有效價格
                 let latest = null;
                 for (let i = prices.length - 1; i >= 0; i--) {
@@ -261,11 +267,33 @@
                         break;
                     }
                 }
-                if (!latest) continue;
+                if (!latest) {
+                    html += `
+                        <a href="/stock/stock_history.php?symbol=${encodeURIComponent(symbol)}" target="_blank" class="stock-card">
+                            <div class="stock-header">
+                                <span class="stock-symbol-title">${escapeHtml(displayTicker(symbol))}</span>
+                                <span class="stock-price">--</span>
+                            </div>
+                            <div class="signal-box none">尚無行情資料，請執行 autoloop 更新</div>
+                        </a>
+                    `;
+                    continue;
+                }
 
                 // 過濾有效價格（至少需要 5 天數據）
                 const validCloses = prices.map(p => p.close).filter(c => c != null);
-                if (validCloses.length < 5) continue;
+                if (validCloses.length < 5) {
+                    html += `
+                        <a href="/stock/stock_history.php?symbol=${encodeURIComponent(symbol)}" target="_blank" class="stock-card">
+                            <div class="stock-header">
+                                <span class="stock-symbol-title">${escapeHtml(displayTicker(symbol))}</span>
+                                <span class="stock-price">${Number(latest.close).toFixed(2)}</span>
+                            </div>
+                            <div class="signal-box none">行情資料不足，等待更多資料</div>
+                        </a>
+                    `;
+                    continue;
+                }
 
                 const closes = validCloses;
                 const ma5 = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
@@ -328,7 +356,7 @@
                 html += `
                     <a href="/stock/stock_history.php?symbol=${encodeURIComponent(symbol)}" target="_blank" class="stock-card">
                         <div class="stock-header">
-                            <span class="stock-symbol-title">${escapeHtml(symbol)}</span>
+                            <span class="stock-symbol-title">${escapeHtml(displayTicker(symbol))}</span>
                             <span class="stock-price">${latest.close.toFixed(2)}</span>
                         </div>
                         <div class="stock-indicators">

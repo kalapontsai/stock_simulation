@@ -45,7 +45,7 @@ $MIN_TRADE_SHARES = 100;
 $config = [
     'stock_list_file'  => __DIR__ . '/data/stock_list.json',
     'portfolio_file'   => __DIR__ . '/data/portfolio.json',
-    'data_file'        => __DIR__ . '/data/stock_data.json',
+    'data_file'        => __DIR__ . '/stock_data.json',
     'settings_file'    => __DIR__ . '/data/indicator_settings.json',
 ];
 

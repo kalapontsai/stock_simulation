@@ -46,10 +46,49 @@ function write_stock_list($file, $data) {
 }
 
 // 工具：驗證股票代號格式
+// 接受帶或不帶 .TW/.TWO 後綴；ETF 末碼字母（00631L / 00981A）也收
 function validate_symbol($symbol) {
     if (!is_string($symbol)) return false;
-    // TWSE: 4-6 數字 + .TW；上櫃: 4-6 數字 + .TWO
-    return preg_match('/^[0-9]{4,6}\.(TW|TWO)$/', $symbol) === 1;
+    // [0-9]{4,6}[A-Z]?(\.(TW|TWO))?
+    // 例：0050 / 0050.TW / 00631L / 00631L.TWO / 00981A / 00981A.TW
+    return preg_match('/^[0-9]{4,6}[A-Z]?(\.(TW|TWO))?$/', $symbol) === 1;
+}
+
+// 工具：把帶後綴的 ticker 轉成顯示用的裸號
+// 0050.TW -> 0050；00631L.TWO -> 00631L；已 bare 直接回傳
+function display_ticker($symbol) {
+    if (!is_string($symbol)) return '';
+    return preg_replace('/\.(TW|TWO)$/', '', $symbol);
+}
+
+// bare ticker 預設補 .TW，已帶後綴則保留原市場別
+function normalize_symbol($symbol) {
+    if (!is_string($symbol)) return '';
+    $symbol = strtoupper(trim($symbol));
+    if ($symbol === '') return '';
+    if (preg_match('/\.(TW|TWO)$/', $symbol) === 1) {
+        return $symbol;
+    }
+    return $symbol . '.TW';
+}
+
+// 允許以 bare ticker 操作既有清單，例如 0050 對應 0050.TW
+function resolve_symbol_from_list($symbol, array $stocks) {
+    if (!is_string($symbol)) return null;
+    $symbol = strtoupper(trim($symbol));
+    if ($symbol === '') return null;
+    if (in_array($symbol, $stocks, true)) {
+        return $symbol;
+    }
+
+    $display = display_ticker($symbol);
+    foreach ($stocks as $stock) {
+        if (display_ticker($stock) === $display) {
+            return $stock;
+        }
+    }
+
+    return null;
 }
 
 // 工具：取本地最後收盤價（從 stock_data.json）
@@ -70,9 +109,9 @@ function get_last_close_price($symbol) {
 
 // 工具：以現價賣出所有策略中此股票的持股
 function liquidate_symbol($symbol, $reason_note = '') {
-    $portfolioFile = __DIR__ . '/portfolio.json';
+    $portfolioFile = __DIR__ . '/data/portfolio.json';
     $analysisFile = __DIR__ . '/data/daily_analysis.json';
-    $profitFile = __DIR__ . '/profit_history.json';
+    $profitFile = __DIR__ . '/data/profit_history.json';
 
     $result = ['liquidated' => [], 'total_cash_added' => 0, 'error' => null];
 
@@ -151,9 +190,11 @@ $method = $_SERVER['REQUEST_METHOD'];
 switch ($method) {
     case 'GET': {
         $list = read_stock_list($STOCK_LIST_FILE);
+        $displays = array_map('display_ticker', $list['stocks']);
         echo json_encode([
             'success' => true,
             'stocks' => $list['stocks'],
+            'displays' => $displays,
             'count' => count($list['stocks']),
             'max' => $MAX_STOCKS,
         ], JSON_UNESCAPED_UNICODE);
@@ -167,14 +208,15 @@ switch ($method) {
 
         if (!validate_symbol($symbol)) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'error' => '代號格式錯誤（須為 NNNN.TW / NNNNNN.TW / NNNN.TWO）']);
+            echo json_encode(['success' => false, 'error' => '代號格式錯誤（可輸入 0050、0050.TW、00631L、00631L.TWO）']);
             exit;
         }
 
+        $symbol = normalize_symbol($symbol);
         $list = read_stock_list($STOCK_LIST_FILE);
-        if (in_array($symbol, $list['stocks'])) {
+        if (resolve_symbol_from_list($symbol, $list['stocks']) !== null) {
             http_response_code(409);
-            echo json_encode(['success' => false, 'error' => "$symbol 已在清單中"]);
+            echo json_encode(['success' => false, 'error' => display_ticker($symbol) . ' 已在清單中']);
             exit;
         }
         if (count($list['stocks']) >= $MAX_STOCKS) {
@@ -205,9 +247,10 @@ switch ($method) {
         }
 
         $list = read_stock_list($STOCK_LIST_FILE);
-        if (!in_array($symbol, $list['stocks'])) {
+        $symbol = resolve_symbol_from_list($symbol, $list['stocks']);
+        if ($symbol === null) {
             http_response_code(404);
-            echo json_encode(['success' => false, 'error' => "$symbol 不在清單中"]);
+            echo json_encode(['success' => false, 'error' => '股票不在清單中']);
             exit;
         }
 
@@ -246,6 +289,8 @@ switch ($method) {
                 exit;
             }
         }
+
+        $newStocks = array_map('normalize_symbol', $newStocks);
 
         if (count($newStocks) === 0) {
             http_response_code(400);

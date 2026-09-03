@@ -83,7 +83,7 @@
                     <label>股票</label>
                     <select id="stock-select">
                         <?php foreach ($stocks as $s): ?>
-                            <option value="<?= htmlspecialchars($s) ?>"><?= htmlspecialchars($s) ?></option>
+                            <option value="<?= htmlspecialchars($s) ?>"><?= htmlspecialchars(preg_replace('/\.(TW|TWO)$/', '', $s)) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -144,6 +144,10 @@
             return sign + fmt(n, digits);
         }
 
+        function displayTicker(symbol) {
+            return String(symbol || '').replace(/\.(TW|TWO)$/, '');
+        }
+
         function renderAccount(data) {
             document.getElementById('cash').textContent = 'NT$ ' + fmt(data.cash, 0);
             document.getElementById('total').textContent = 'NT$ ' + fmt(data.total_value, 0);
@@ -164,7 +168,7 @@
                 const pl = h.unrealized_pl;
                 const plClass = pl === null ? '' : (pl >= 0 ? 'positive' : 'negative');
                 return `<tr>
-                    <td>${h.stock}</td>
+                    <td>${displayTicker(h.stock)}</td>
                     <td class="num">${fmt(h.quantity, 0)}</td>
                     <td class="num">${fmt(h.price, 2)}</td>
                     <td class="num">${fmt(h.cost_basis, 2)}</td>
@@ -194,7 +198,7 @@
                 return `<tr>
                     <td>${t.date}</td>
                     <td class="${actionClass}">${actionText}</td>
-                    <td>${t.stock}</td>
+                    <td>${displayTicker(t.stock)}</td>
                     <td class="num">${fmt(t.price, 2)}</td>
                     <td class="num">${fmt(t.quantity, 0)}</td>
                     <td class="num">${fmt(amount, 0)}</td>

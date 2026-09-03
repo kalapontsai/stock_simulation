@@ -85,17 +85,17 @@
         <div class="section">
             <div class="section-title">新增單筆</div>
             <div class="form-row">
-                <input type="text" id="addSymbol" class="form-input" placeholder="例如：0050.TW" maxlength="10">
+                <input type="text" id="addSymbol" class="form-input" placeholder="例如：0050、00631L、00981A" maxlength="10">
                 <button class="btn" onclick="addStock()">新增</button>
             </div>
-            <div class="form-hint">格式：TWSE 為 NNNN.TW（如 0050.TW、2330.TW），上櫃為 NNNN.TWO</div>
+            <div class="form-hint">支援 bare ticker 或完整代號；bare 預設以 `.TW` 儲存，若要上櫃請手動輸入 `.TWO`</div>
         </div>
 
         <!-- 批次匯入 -->
         <div class="section">
             <div class="section-title">整批取代</div>
             <div class="section-desc">⚠️ 整批取代會把「不在新清單內」的股票以現價賣出（現金入帳）。</div>
-            <textarea id="bulkInput" class="form-textarea" placeholder="0050.TW,2330.TW,2885.TW 或每行一個"></textarea>
+            <textarea id="bulkInput" class="form-textarea" placeholder="0050,2330,00631L 或每行一個"></textarea>
             <div class="form-hint" style="margin-bottom: 10px;">支援逗號、空格、換行分隔</div>
             <button class="btn" onclick="bulkReplace()">整批取代</button>
         </div>
@@ -117,13 +117,20 @@
             return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
 
+        function displayTicker(symbol) {
+            return String(symbol || '').replace(/\.(TW|TWO)$/, '');
+        }
+
         async function loadStocks() {
             try {
                 const res = await fetch(API_URL, { headers: { 'Referer': location.href } });
                 // fetch() 預設帶同源 Referer，但某些瀏覽器會 strip，加保險
                 const data = await res.json();
                 if (!data.success) throw new Error(data.error);
-                currentStocks = data.stocks;
+                currentStocks = data.stocks.map((stock, index) => ({
+                    code: stock,
+                    display: data.displays?.[index] || displayTicker(stock)
+                }));
                 renderStocks();
             } catch (e) {
                 showMessage('error', '載入失敗', e.message);
@@ -141,8 +148,8 @@
             }
             list.innerHTML = currentStocks.map(s => `
                 <div class="stock-item">
-                    <span class="stock-symbol">${escapeHtml(s)}</span>
-                    <button class="btn btn-danger btn-small" onclick="deleteStock('${escapeHtml(s)}')">移除</button>
+                    <span class="stock-symbol">${escapeHtml(s.display)}</span>
+                    <button class="btn btn-danger btn-small" onclick="deleteStock('${escapeHtml(s.code)}', '${escapeHtml(s.display)}')">移除</button>
                 </div>
             `).join('');
         }
@@ -159,7 +166,7 @@
                 });
                 const data = await res.json();
                 if (!data.success) throw new Error(data.error);
-                showMessage('success', `已新增 ${symbol}`);
+                showMessage('success', `已新增 ${displayTicker(data.added || symbol)}`);
                 document.getElementById('addSymbol').value = '';
                 await loadStocks();
             } catch (e) {
@@ -167,8 +174,9 @@
             }
         }
 
-        async function deleteStock(symbol) {
-            if (!confirm(`確定要移除 ${symbol}？\n模擬系統會以現價賣出該股所有持股，現金入帳。`)) return;
+        async function deleteStock(symbol, display) {
+            const label = display || displayTicker(symbol);
+            if (!confirm(`確定要移除 ${label}？\n模擬系統會以現價賣出該股所有持股，現金入帳。`)) return;
 
             try {
                 const res = await fetch(`${API_URL}?symbol=${encodeURIComponent(symbol)}`, {
@@ -176,7 +184,7 @@
                 });
                 const data = await res.json();
                 if (!data.success) throw new Error(data.error);
-                let msg = `已移除 ${symbol}`;
+                let msg = `已移除 ${label}`;
                 if (data.liquidation && data.liquidation.liquidated.length > 0) {
                     const total = data.liquidation.total_cash_added.toLocaleString();
                     msg += `\n自動賣出 ${data.liquidation.liquidated.length} 筆，共入帳 ${total} 元`;
