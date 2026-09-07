@@ -4,6 +4,29 @@ stock 系統所有變更記錄。
 
 格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)。
 
+## [Unreleased] - 2026-09-07
+
+### Fixed
+- `stocks_api.php::normalize_symbol()`：bare ticker（如 `4979`、`3081`、`3363`）一律補 `.TW` 的問題。
+  原行為會讓上櫃股被誤判為上市，Yahoo Finance 回 404 → 2026-09-07 股價更新靜默漏抓。
+  新行為依序查 Yahoo `.TW` → `.TWO`，命中即停並寫入 `data/.symbol_market_cache.json`
+  （success TTL 7 天 / fallback TTL 1 小時）；probe 故障 / 逾時不 spam log、不中斷主流程。
+  - 已附後綴 → 保留（大小寫轉大寫）。
+  - 兩邊都查無 → fallback `.TW`（向下相容）。
+  - `validate_symbol()` 同步改為容忍前後空白與大小寫。
+
+### Added
+- `lib/symbol_resolver.py`：Python 鏡像模組（PHP `normalize_symbol()` 的演算法規格書）。
+- `tests/test_normalize_symbol.py`：33 個 pytest（30 個 mock probe + 3 個真打 Yahoo）。
+- `tests/run_php_tests.php`：46 個 PHP 測試（純單元，依賴注入 probe）。
+- `tests/run_php_live_integration.php`：14 個 PHP 對 Yahoo 的整合測試（網路不通時 skip）。
+
+### Verified
+- 上市 `0050` → `.TW`；上櫃 `4979` / `3081` / `3363` → `.TWO`；無效 `9999` → fallback `.TW`。
+- `python3 -m pytest tests/` → 52 passed, 2 skipped（既有測試未受影響）。
+- `php tests/run_php_tests.php` → 46 passed。
+- `php tests/run_php_live_integration.php` → 14 passed（含 Yahoo `.TWO` 真實回傳驗證）。
+
 ## [Unreleased] - 2026-09-03
 
 ### Fixed

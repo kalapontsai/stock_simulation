@@ -47,8 +47,10 @@ function write_stock_list($file, $data) {
 
 // 工具：驗證股票代號格式
 // 接受帶或不帶 .TW/.TWO 後綴；ETF 末碼字母（00631L / 00981A）也收
+// 會容忍前後空白與大小寫（內部以 trim + strtoupper 正規化）
 function validate_symbol($symbol) {
     if (!is_string($symbol)) return false;
+    $symbol = strtoupper(trim($symbol));
     // [0-9]{4,6}[A-Z]?(\.(TW|TWO))?
     // 例：0050 / 0050.TW / 00631L / 00631L.TWO / 00981A / 00981A.TW
     return preg_match('/^[0-9]{4,6}[A-Z]?(\.(TW|TWO))?$/', $symbol) === 1;
@@ -61,15 +63,193 @@ function display_ticker($symbol) {
     return preg_replace('/\.(TW|TWO)$/', '', $symbol);
 }
 
-// bare ticker 預設補 .TW，已帶後綴則保留原市場別
-function normalize_symbol($symbol) {
+// --- 市場別 cache ---
+// 檔案路徑：data/.symbol_market_cache.json
+// 結構：{ "<bare>": {"market":"TW"|"TWO", "ts": <unix>, "fallback": bool, "probe_error": bool} }
+define('SYMBOL_CACHE_FILE', __DIR__ . '/data/.symbol_market_cache.json');
+define('SYMBOL_CACHE_TTL_SUCCESS', 7 * 24 * 3600);   // 命中市場別 → 7 天（市場別不會變）
+define('SYMBOL_CACHE_TTL_FAILURE', 3600);            // fallback → 1 小時（讓 Yahoo 恢復時能重試）
+define('YAHOO_PROBE_TIMEOUT', 3);                    // 單次 HTTP probe 逾時秒數
+
+function _read_symbol_cache($file) {
+    if (!file_exists($file)) return [];
+    $raw = @file_get_contents($file);
+    if ($raw === false) return [];
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function _write_symbol_cache($file, $cache) {
+    // 寫入失敗不應影響主流程
+    @file_put_contents(
+        $file,
+        json_encode($cache, JSON_UNESCAPED_UNICODE),
+        LOCK_EX
+    );
+}
+
+// Yahoo probe：查 candidate 是否有效
+// - 回傳 "TW" / "TWO" = 候選代號有效
+// - 回傳 '' = 候選代號無效（chart.error / 404）
+// - 拋 RuntimeException = 網路 / timeout / JSON 失敗（caller 視為 probe 故障）
+//
+// 用 cURL 而非 file_get_contents：
+// - 部署端 Apache 通常 cURL 為主（yfinance 也在用），避免 SSL CA 路徑問題
+// - 可讀 4xx body（invalid symbol 走 HTTP 404 + JSON），不用 ignore_errors hack
+function yahoo_probe_market($candidate, $timeout = YAHOO_PROBE_TIMEOUT) {
+    if (!is_string($candidate)) {
+        throw new InvalidArgumentException('candidate 必須是字串');
+    }
+    if (!preg_match('/\.(TW|TWO)$/', $candidate)) {
+        throw new InvalidArgumentException("candidate 必須帶 .TW/.TWO 後綴: $candidate");
+    }
+    $market = preg_match('/\.TWO$/', $candidate) ? 'TWO' : 'TW';
+    $url = 'https://query1.finance.yahoo.com/v8/finance/chart/' . $candidate;
+
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException('cURL extension 未啟用，無法 probe Yahoo');
+    }
+
+    $ch = curl_init($url);
+    if ($ch === false) {
+        throw new RuntimeException("curl_init 失敗: $candidate");
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => $timeout,
+        CURLOPT_USERAGENT => 'Mozilla/5.0',
+        CURLOPT_HTTPHEADER => ['Accept: application/json'],
+        // 4xx / 5xx 仍由我們讀 body 判斷，不要自動 fail
+        CURLOPT_FAILONERROR => false,
+        // 保留完整 TLS 憑證鏈與主機名稱驗證，避免 probe 被偽造。
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+    ]);
+
+    $body = curl_exec($ch);
+    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+
+    if ($body === false) {
+        throw new RuntimeException("Yahoo probe 失敗 ($err): $candidate");
+    }
+
+    $data = json_decode($body, true);
+    if (!is_array($data)) {
+        throw new RuntimeException("Yahoo 回傳非 JSON: $candidate");
+    }
+
+    $chart = isset($data['chart']) && is_array($data['chart']) ? $data['chart'] : null;
+    if ($chart === null) {
+        throw new RuntimeException("Yahoo 回傳結構異常: $candidate");
+    }
+
+    // chart.error 存在 → ticker 無效（不論 HTTP 200 / 404）
+    if (!empty($chart['error'])) {
+        return '';
+    }
+
+    // HTTP 404 但沒 chart.error → 也視為無效
+    if ($status === 404) {
+        return '';
+    }
+
+    // HTTP 5xx / 429 → 視為 probe 故障
+    if ($status >= 500 || $status === 429) {
+        throw new RuntimeException("Yahoo HTTP $status: $candidate");
+    }
+
+    $result = isset($chart['result']) ? $chart['result'] : null;
+    if (is_array($result) && count($result) > 0) {
+        return $market;
+    }
+
+    // 其它未知狀況：chart.result 為空但也沒 error → 視為無效
+    return '';
+}
+
+// 一次性 log：同一 candidate 在同一 process 只 log 一次（避免 spam）
+function _log_probe_error($candidate, $msg) {
+    static $logged = [];
+    if (isset($logged[$candidate])) return;
+    $logged[$candidate] = true;
+    error_log("[stocks_api] normalize_symbol Yahoo probe 失敗: $candidate: $msg");
+}
+
+// bare ticker 判定市場別：
+//   - 已附 .TW/.TWO → 保留（大小寫轉大寫）
+//   - bare → 依序查 Yahoo .TW → .TWO，命中即停並寫 cache
+//   - 兩邊都查無 → fallback .TW（向下相容舊行為）並寫 cache
+//   - probe 故障（網路 / timeout / 5xx）→ 中止 fallback、log 一次、回 .TW
+//
+// $options 可選：
+//   - cache_file: 預設 SYMBOL_CACHE_FILE；測試可換暫存檔
+//   - probe: callable|null，預設 yahoo_probe_market；測試可注入 fake
+function normalize_symbol($symbol, array $options = []) {
     if (!is_string($symbol)) return '';
     $symbol = strtoupper(trim($symbol));
     if ($symbol === '') return '';
     if (preg_match('/\.(TW|TWO)$/', $symbol) === 1) {
         return $symbol;
     }
-    return $symbol . '.TW';
+
+    // bare → 驗證基本格式
+    if (!validate_symbol($symbol)) {
+        return '';
+    }
+
+    $bare = $symbol;
+    $cache_file = isset($options['cache_file']) && is_string($options['cache_file'])
+        ? $options['cache_file']
+        : SYMBOL_CACHE_FILE;
+    $probe = isset($options['probe']) && is_callable($options['probe'])
+        ? $options['probe']
+        : 'yahoo_probe_market';
+
+    $cache = _read_symbol_cache($cache_file);
+
+    // Cache hit
+    if (isset($cache[$bare]) && is_array($cache[$bare])) {
+        $entry = $cache[$bare];
+        $ts = isset($entry['ts']) ? (int)$entry['ts'] : 0;
+        $market = isset($entry['market']) ? $entry['market'] : null;
+        $is_fallback = !empty($entry['fallback']);
+        $ttl = $is_fallback ? SYMBOL_CACHE_TTL_FAILURE : SYMBOL_CACHE_TTL_SUCCESS;
+        if (in_array($market, ['TW', 'TWO'], true) && (time() - $ts) < $ttl) {
+            return $bare . '.' . $market;
+        }
+    }
+
+    // Cache miss → 依序查 Yahoo
+    $resolved = null;
+    $probe_error = false;
+    foreach (['TW', 'TWO'] as $market) {
+        $candidate = $bare . '.' . $market;
+        try {
+            $result = call_user_func($probe, $candidate, YAHOO_PROBE_TIMEOUT);
+        } catch (Exception $e) {
+            $probe_error = true;
+            _log_probe_error($candidate, $e->getMessage());
+            break;  // 中止 fallback 避免 spam
+        }
+        if ($result === $market) {
+            $resolved = $market;
+            break;
+        }
+        // $result === '' → 此市場無效，繼續查下一個
+    }
+
+    // 寫 cache（無論命中 / fallback / probe 故障都寫，避免重複 probe）
+    $cache[$bare] = [
+        'market' => $resolved === null ? 'TW' : $resolved,
+        'ts' => time(),
+        'fallback' => $resolved === null,
+        'probe_error' => $probe_error,
+    ];
+    _write_symbol_cache($cache_file, $cache);
+
+    return $bare . '.' . ($resolved === null ? 'TW' : $resolved);
 }
 
 // 允許以 bare ticker 操作既有清單，例如 0050 對應 0050.TW
