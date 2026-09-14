@@ -110,6 +110,11 @@
         .stock-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
         .stock-symbol-title { font-weight: bold; color: #58a6ff; font-size: 16px; }
         .stock-price { font-size: 20px; font-weight: bold; }
+        .stock-price-block { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+        .stock-change { font-size: 12px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+        .stock-change.up { color: #3fb950; }
+        .stock-change.down { color: #f85149; }
+        .stock-change.flat { color: #8b949e; }
         .stock-indicators { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
         .indicator { text-align: center; background: #161b22; padding: 6px 4px; border-radius: 4px; }
         .indicator-label { color: #8b949e; font-size: 10px; margin-bottom: 2px; }
@@ -427,11 +432,34 @@
                     }
                 }
 
+                // 與前一交易日比較：抓上一根 K 棒的 close
+                let changeVal = null, changePct = null, changeClass = 'flat', changeText = '--';
+                if (prices.length >= 2) {
+                    const prevPrice = prices[prices.length - 2];
+                    if (prevPrice && prevPrice.close != null && latest.close != null && prevPrice.close !== 0) {
+                        changeVal = latest.close - prevPrice.close;
+                        changePct = (changeVal / prevPrice.close) * 100;
+                        if (changeVal > 0) {
+                            changeClass = 'up';
+                            changeText = `+${changeVal.toFixed(2)} (+${changePct.toFixed(2)}%)`;
+                        } else if (changeVal < 0) {
+                            changeClass = 'down';
+                            changeText = `${changeVal.toFixed(2)} (${changePct.toFixed(2)}%)`;
+                        } else {
+                            changeClass = 'flat';
+                            changeText = `0.00 (0.00%)`;
+                        }
+                    }
+                }
+
                 html += `
                     <a href="/stock/stock_history.php?symbol=${encodeURIComponent(symbol)}" target="_blank" class="stock-card">
                         <div class="stock-header">
                             <span class="stock-symbol-title">${escapeHtml(displayTicker(symbol))}</span>
-                            <span class="stock-price">${latest.close.toFixed(2)}</span>
+                            <div class="stock-price-block">
+                                <span class="stock-price">${latest.close.toFixed(2)}</span>
+                                <span class="stock-change ${changeClass}">${escapeHtml(changeText)}</span>
+                            </div>
                         </div>
                         <div class="stock-indicators">
                             <div class="indicator-ma">MA5: ${ma5.toFixed(2)} / MA20: ${ma20.toFixed(2)}</div>
