@@ -289,9 +289,9 @@ function get_last_close_price($symbol) {
 
 // 工具：以現價賣出所有策略中此股票的持股
 function liquidate_symbol($symbol, $reason_note = '') {
-    $portfolioFile = __DIR__ . '/data/portfolio.json';
-    $analysisFile = __DIR__ . '/data/daily_analysis.json';
-    $profitFile = __DIR__ . '/data/profit_history.json';
+    $portfolioFile = __DIR__ . '/portfolio.json';
+    $analysisFile = __DIR__ . '/daily_analysis.json';
+    $profitFile = __DIR__ . '/profit_history.json';
 
     $result = ['liquidated' => [], 'total_cash_added' => 0, 'error' => null];
 

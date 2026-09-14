@@ -9,7 +9,65 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
         .container { max-width: 1400px; margin: 0 auto; }
         h1 { text-align: center; margin-bottom: 10px; color: #58a6ff; }
-        .subtitle { text-align: center; color: #8b949e; margin-bottom: 30px; }
+        .subtitle { text-align: center; color: #8b949e; margin-bottom: 20px; }
+
+        /* 即時更新控制列 */
+        .realtime-bar {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        .realtime-bar .label { color: #8b949e; font-size: 14px; }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 46px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #30363d;
+            border-radius: 24px;
+            transition: background-color 0.2s;
+        }
+        .toggle-slider::before {
+            position: absolute;
+            content: "";
+            height: 18px; width: 18px;
+            left: 3px; bottom: 3px;
+            background-color: #c9d1d9;
+            border-radius: 50%;
+            transition: transform 0.2s, background-color 0.2s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background-color: #2ea043; }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(22px); background-color: #fff; }
+        .toggle-switch input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
+        .interval-select {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .interval-select:disabled { opacity: 0.5; cursor: not-allowed; }
+        .rt-status {
+            color: #8b949e;
+            font-size: 13px;
+            min-width: 220px;
+            text-align: left;
+        }
+        .rt-status.updating { color: #d29922; }
+        .rt-status.error { color: #f85149; }
+        .rt-status.ok { color: #3fb950; }
 
         .bots { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; margin-bottom: 30px; }
         .bot-card { background: #161b22; border-radius: 12px; padding: 20px; border: 1px solid #30363d; }
@@ -77,6 +135,22 @@
         <h1>股市模擬投資 Dashboard</h1>
         <p class="subtitle">最後更新: <span id="updateTime">載入中...</span></p>
 
+        <div class="realtime-bar">
+            <span class="label">即時股價更新</span>
+            <label class="toggle-switch" title="開啟後自動抓取最新股價（不打交易）">
+                <input type="checkbox" id="realtimeToggle">
+                <span class="toggle-slider"></span>
+            </label>
+            <select id="realtimeInterval" class="interval-select" title="更新間隔">
+                <option value="60000">1 分鐘</option>
+                <option value="180000">3 分鐘</option>
+                <option value="300000" selected>5 分鐘</option>
+                <option value="600000">10 分鐘</option>
+                <option value="900000">15 分鐘</option>
+            </select>
+            <span id="realtimeStatus" class="rt-status">已關閉</span>
+        </div>
+
         <div class="bots" id="bots"></div>
 
         <div class="market">
@@ -92,7 +166,7 @@
             <a href="/stock/profit_history.php" class="btn" style="background: #8957e5;" target="_blank">獲利歷史</a>
             <a href="/stock/stocks.php" class="btn" style="background: #1f6feb;" target="_blank">股票清單維護</a>
             <a href="/stock/manual_trade.php" class="btn" style="background: #6e40c9;" target="_blank">手動投資</a>
-            <a href="/stock/data/stock_data.json" class="btn" style="background: #1f6feb;" target="_blank">歷史資料</a>
+            <a href="/stock/stock_data.json" class="btn" style="background: #1f6feb;" target="_blank">歷史資料</a>
         </div>
 
         <div id="snapshotModal" class="modal" style="display:none;">
@@ -132,8 +206,8 @@
 
         function loadData() {
             Promise.all([
-                fetch('/stock/data/stock_data.json').then(r => r.json()),
-                fetch('/stock/data/portfolio.json').then(r => r.json()),
+                fetch('/stock/stock_data.json').then(r => r.json()),
+                fetch('/stock/portfolio.json').then(r => r.json()),
                 fetch('/stock/stocks_api.php').then(r => r.json())
             ]).then(([stockData, portfolio, stockList]) => {
                 renderPortfolio(portfolio, stockData);
@@ -490,6 +564,135 @@
         loadData();
         loadSnapshot();
         setInterval(loadData, 60000);
+
+        /* ========== 即時股價更新 (只更新不打交易) ========== */
+        const RT_KEY = 'stock_realtime_v1';
+        const rtToggle = document.getElementById('realtimeToggle');
+        const rtIntervalSel = document.getElementById('realtimeInterval');
+        const rtStatus = document.getElementById('realtimeStatus');
+        let rtTimer = null;      // setInterval handle
+        let rtCountdown = null;  // 倒數 setInterval
+        let rtNextAt = 0;        // 下次更新時間戳 (ms)
+        let rtInFlight = false;  // 避免重複請求
+
+        function loadRtPref() {
+            try {
+                const raw = localStorage.getItem(RT_KEY);
+                if (!raw) return { enabled: false, interval: 300000 };
+                const p = JSON.parse(raw);
+                return {
+                    enabled: !!p.enabled,
+                    interval: [60000,180000,300000,600000,900000].includes(p.interval) ? p.interval : 300000
+                };
+            } catch (e) { return { enabled: false, interval: 300000 }; }
+        }
+        function saveRtPref() {
+            localStorage.setItem(RT_KEY, JSON.stringify({
+                enabled: rtToggle.checked,
+                interval: parseInt(rtIntervalSel.value, 10)
+            }));
+        }
+        function setStatus(text, cls='') {
+            rtStatus.textContent = text;
+            rtStatus.className = 'rt-status' + (cls ? ' ' + cls : '');
+        }
+        function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+        function fmtClock(ms) {
+            const d = new Date(ms);
+            return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+        }
+        function startCountdown() {
+            stopCountdown();
+            rtCountdown = setInterval(() => {
+                if (!rtToggle.checked) return;
+                const left = Math.max(0, rtNextAt - Date.now());
+                const m = Math.floor(left / 60000);
+                const s = Math.floor((left % 60000) / 1000);
+                setStatus(`下次更新: ${fmtClock(rtNextAt)} (剩 ${pad2(m)}:${pad2(s)})`);
+            }, 1000);
+        }
+        function stopCountdown() {
+            if (rtCountdown) { clearInterval(rtCountdown); rtCountdown = null; }
+        }
+        async function runRealtimeUpdate() {
+            if (rtInFlight) return;
+            if (!navigator.onLine) {
+                setStatus('離線中，下次重連時更新', 'error');
+                rtNextAt = Date.now() + 60000;
+                return;
+            }
+            rtInFlight = true;
+            setStatus('正在抓取 Yahoo Finance 股價...', 'updating');
+            const t0 = Date.now();
+            try {
+                const r = await fetch('/stock/stock_trader.php?update=1', { cache: 'no-store' });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const txt = await r.text();
+                const sec = ((Date.now() - t0) / 1000).toFixed(1);
+                // 從輸出抓「最新價格」數量當作成功指標
+                const m = txt.match(/最新價格: ([0-9.]+)/g);
+                const cnt = m ? m.length : 0;
+                if (cnt === 0) {
+                    setStatus('更新完成但無股票回傳，請檢查 Yahoo Finance', 'error');
+                } else {
+                    setStatus(`已更新 ${cnt} 檔 (${sec}s) · 下次: ${fmtClock(rtNextAt)}`, 'ok');
+                }
+                loadData(); // 立即重新讀本地 JSON 顯示新價
+            } catch (err) {
+                setStatus('更新失敗: ' + err.message + '，下次重試', 'error');
+            } finally {
+                rtInFlight = false;
+                scheduleNext();
+            }
+        }
+        function scheduleNext() {
+            if (!rtToggle.checked) return;
+            const ms = parseInt(rtIntervalSel.value, 10);
+            rtNextAt = Date.now() + ms;
+            startCountdown();
+        }
+        function startRealtime() {
+            saveRtPref();
+            rtIntervalSel.disabled = false;
+            setStatus('啟用中...', 'updating');
+            // 立即打一次 + 排程下一次
+            runRealtimeUpdate();
+            rescheduleTimer();
+        }
+        function rescheduleTimer() {
+            if (rtTimer) { clearInterval(rtTimer); rtTimer = null; }
+            rtTimer = setInterval(() => {
+                if (!rtToggle.checked) return;
+                runRealtimeUpdate();
+            }, parseInt(rtIntervalSel.value, 10));
+        }
+        function stopRealtime() {
+            saveRtPref();
+            if (rtTimer) { clearInterval(rtTimer); rtTimer = null; }
+            stopCountdown();
+            rtIntervalSel.disabled = true;
+            setStatus('已關閉');
+        }
+        rtToggle.addEventListener('change', () => {
+            if (rtToggle.checked) startRealtime();
+            else stopRealtime();
+        });
+        rtIntervalSel.addEventListener('change', () => {
+            saveRtPref();
+            if (rtToggle.checked) {
+                // 變更間隔：重新排程計時器 + 重設下次更新時間
+                rescheduleTimer();
+                scheduleNext();
+            }
+        });
+        // 初始狀態
+        (function initRealtime() {
+            const pref = loadRtPref();
+            rtIntervalSel.value = String(pref.interval);
+            rtIntervalSel.disabled = true;  // toggle 開啟前不能調
+            rtToggle.checked = pref.enabled;
+            if (pref.enabled) startRealtime();
+        })();
     </script>
 </body>
 </html>

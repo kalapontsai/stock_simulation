@@ -24,7 +24,7 @@ $config = [
     'data_file' => __DIR__ . '/stock_data.json',
     'portfolio_file' => __DIR__ . '/portfolio.json',
     'profit_history_file' => __DIR__ . '/profit_history.json',
-    'analysis_file' => __DIR__ . '/data/daily_analysis.json',
+    'analysis_file' => __DIR__ . '/daily_analysis.json',
     'snapshot_file' => __DIR__ . '/data/snapshot.json',
     'log_file' => __DIR__ . '/data/trade.log'
 ];
