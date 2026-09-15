@@ -210,10 +210,12 @@
         }
 
         function loadData() {
+            // cache:'no-store' 避免瀏覽器吃 disk cache，拿到舊的 stock_data.json
+            // 舊版會造成 dashboard 計算「前一交易日」時用過時資料，漲跌數字錯。
             Promise.all([
-                fetch('/stock/stock_data.json').then(r => r.json()),
-                fetch('/stock/portfolio.json').then(r => r.json()),
-                fetch('/stock/stocks_api.php').then(r => r.json())
+                fetch('/stock/stock_data.json', { cache: 'no-store' }).then(r => r.json()),
+                fetch('/stock/portfolio.json', { cache: 'no-store' }).then(r => r.json()),
+                fetch('/stock/stocks_api.php', { cache: 'no-store' }).then(r => r.json())
             ]).then(([stockData, portfolio, stockList]) => {
                 renderPortfolio(portfolio, stockData);
                 renderStocks(stockData, stockList.stocks || Object.keys(stockData));
