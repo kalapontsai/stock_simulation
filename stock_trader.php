@@ -510,7 +510,21 @@ if (php_sapi_name() === 'cli' || isset($_GET['run']) || isset($_GET['update']) |
 
         if ($prices) {
             $currentPrices[$symbol] = end($prices)['close'];
-            $allData[$symbol] = $prices;
+            // Merge 而非覆蓋：Yahoo null 欄位保留現有有效值，避免原本有資料的 K 棒被洗掉
+            $existing = $allData[$symbol] ?? [];
+            $merged = $existing;
+            foreach ($prices as $i => $newBar) {
+                if (!isset($merged[$i])) {
+                    $merged[$i] = $newBar;
+                    continue;
+                }
+                foreach ($newBar as $k => $v) {
+                    if ($v !== null) {
+                        $merged[$i][$k] = $v;
+                    }
+                }
+            }
+            $allData[$symbol] = $merged;
             echo "  最新價格: " . $currentPrices[$symbol] . "\n";
 
             // 只在完整交易模式執行技術分析與交易
