@@ -82,6 +82,68 @@ function getStockData($symbol) {
 }
 
 
+// 從 TWSE STOCK_DAY 抓個股單日收盤資料（給 null K 棒備援用）
+// 只支援 .TW（上市）。.TWO（上檔）需要 TPEx API，未實作。
+// 回傳 ['open'=>..,'high'=>..,'low'=>..,'close'=>..,'volume'=>..] 或 null（查無）
+function fetchTWSEData($stockNo, $yyyymmdd) {
+    $url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={$yyyymmdd}&stockNo={$stockNo}";
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer: https://www.twse.com.tw/'
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    $response = curl_exec($ch);
+    curl_close($ch);
+    if (!$response) return null;
+    $data = json_decode($response, true);
+    if (!$data || ($data['stat'] ?? '') !== 'OK' || empty($data['data'])) return null;
+    // TWSE 日期格式: 115/09/16（民國年）
+    $twYear = (int)substr($yyyymmdd, 0, 4) - 1911;
+    $twDate = sprintf('%d/%02d/%02d', $twYear, (int)substr($yyyymmdd, 4, 2), (int)substr($yyyymmdd, 6, 2));
+    foreach ($data['data'] as $row) {
+        if ($row[0] === $twDate) {
+            // row: [日期, 成交股數, 成交金額, 開盤, 最高, 最低, 收盤, 涨跌價差, 成交筆數, 註記]
+            $num = fn($s) => (float)str_replace(',', '', $s);
+            return [
+                'open'   => $num($row[3]),
+                'high'   => $num($row[4]),
+                'low'    => $num($row[5]),
+                'close'  => $num($row[6]),
+                'volume' => (int)$num($row[1]),
+            ];
+        }
+    }
+    return null;
+}
+
+// 掃描 allData 對所有 close=null 的 K 棒，從 TWSE 補上（只支援 .TW）
+// 回傳 ['filled'=>N, 'not_found'=>['SYMBOL/DATE', ...]]
+function fillMissingFromTWSE(&$allData) {
+    $filled = 0;
+    $notFound = [];
+    foreach ($allData as $symbol => &$bars) {
+        if (!preg_match('/\.TW$/', $symbol)) continue;  // 只補上市
+        $stockNo = preg_replace('/\.TW$/', '', $symbol);
+        foreach ($bars as $i => $bar) {
+            if ($bar['close'] !== null) continue;
+            $yyyymmdd = str_replace('-', '', $bar['date']);
+            $twse = fetchTWSEData($stockNo, $yyyymmdd);
+            if ($twse) {
+                $bars[$i] = array_merge($bar, $twse);
+                $filled++;
+                echo "  [TWSE] $symbol {$bar['date']} 補上 close={$twse['close']}\n";
+            } else {
+                $notFound[] = "$symbol/{$bar['date']}";
+            }
+        }
+    }
+    return ['filled' => $filled, 'not_found' => $notFound];
+}
+
+
 // 載入技術指標參數設定
 function loadIndicatorSettings($strategyIdx = 0) {
     $file = __DIR__ . '/data/indicator_settings.json';
@@ -636,6 +698,18 @@ if (php_sapi_name() === 'cli' || isset($_GET['run']) || isset($_GET['update']) |
         
         // 儲存獲利歷史
         file_put_contents($config['profit_history_file'], json_encode($profitHistory, JSON_PRETTY_PRINT));
+    }
+
+    // 儲存股價資料前，先從 TWSE 補 Yahoo 漏抓的 K 棒
+    echo "\n檢查是否有缺漏 K 棒...\n";
+    $fillResult = fillMissingFromTWSE($allData);
+    if ($fillResult['filled'] > 0) {
+        echo "  TWSE 補上 {$fillResult['filled']} 根\n";
+    } else {
+        echo "  無缺漏\n";
+    }
+    if (!empty($fillResult['not_found'])) {
+        echo "  TWSE 查無: " . implode(', ', $fillResult['not_found']) . "\n";
     }
 
     // 儲存股價資料(兩種模式都更新)

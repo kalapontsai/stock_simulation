@@ -439,16 +439,10 @@
                     }
                 }
 
-                // 與前一交易日比較：跳過 close 為 null 的 K 棒（Yahoo 可能某天沒資料）
+                // 與前一交易日比較：嚴格只看 prices[len-2]，不跳過 null（後端已從 TWSE 自動補足）
                 let changeVal = null, changePct = null, changeClass = 'flat', changeText = '--';
                 if (prices.length >= 2) {
-                    let prevPrice = null;
-                    for (let i = prices.length - 2; i >= 0; i--) {
-                        if (prices[i].close != null && prices[i].date !== latest.date) {
-                            prevPrice = prices[i];
-                            break;
-                        }
-                    }
+                    const prevPrice = prices[prices.length - 2];
                     if (prevPrice && prevPrice.close != null && latest.close != null && prevPrice.close !== 0) {
                         changeVal = latest.close - prevPrice.close;
                         changePct = (changeVal / prevPrice.close) * 100;
