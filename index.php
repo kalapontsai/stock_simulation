@@ -336,9 +336,14 @@
         }
 
         function renderStocks(stockData, stockList) {
+            // 依照代號排序（去 .TW/.TWO 後比較，讓上檔股跟上市股依代號混排）
+            const sortedList = [...stockList].sort((a, b) => {
+                const ac = displayTicker(a), bc = displayTicker(b);
+                return ac < bc ? -1 : ac > bc ? 1 : 0;
+            });
             let html = '';
 
-            for (const symbol of stockList) {
+            for (const symbol of sortedList) {
                 const prices = Array.isArray(stockData[symbol]) ? stockData[symbol] : [];
                 // 找到最後一個有效價格
                 let latest = null;
