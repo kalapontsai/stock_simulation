@@ -130,7 +130,7 @@
                 currentStocks = data.stocks.map((stock, index) => ({
                     code: stock,
                     display: data.displays?.[index] || displayTicker(stock)
-                }));
+                })).sort((a, b) => a.display < b.display ? -1 : a.display > b.display ? 1 : 0);
                 renderStocks();
             } catch (e) {
                 showMessage('error', '載入失敗', e.message);
