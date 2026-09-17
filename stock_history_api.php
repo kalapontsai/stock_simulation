@@ -216,9 +216,8 @@ function calculateBollingerBands($closes, $period = 20, $stdDev = 2) {
     return ['upper' => $upper, 'middle' => $middle, 'lower' => $lower];
 }
 
-// 過濾有效資料
-$validData = array_filter($prices, fn($p) => $p['close'] !== null);
-$validData = array_values($validData);
+// 保留所有 K 棒（含 close=null 的空棒），前端 chart 自動處理 gap
+$validData = array_values($prices);
 
 $closes = array_column($validData, 'close');
 $volumes = array_column($validData, 'volume');
